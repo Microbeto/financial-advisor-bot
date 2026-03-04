@@ -1,0 +1,23 @@
+# Environment / secrets
+.env
+*.env
+
+# Python
+venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node
+**/node_modules/
+frontend/.next/
+
+# Local data/artifacts
+backend/.mongo-data/
+backend/model_store/
+backend/.cache/
+**/*.tsbuildinfo
+
+# OS/editor
+.DS_Store
+Thumbs.db

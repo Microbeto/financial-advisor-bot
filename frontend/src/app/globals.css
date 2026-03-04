@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-950 text-slate-50;
+}
+
+/* Full-screen stock-style background */
+@keyframes stock-float-slow {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(16px, -8px, 0) scale(1.02);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes stock-float-fast {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(-24px, 10px, 0) scale(1.03);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.animate-stock-float-slow {
+  animation: stock-float-slow 18s ease-in-out infinite;
+}
+
+.animate-stock-float-fast {
+  animation: stock-float-fast 24s ease-in-out infinite;
+}
+
+/* Subtle grid / glow you can re-use on sections if you like */
+.bg-stock-hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.bg-stock-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      to right,
+      rgba(51, 65, 85, 0.3),
+      rgba(51, 65, 85, 0.3) 1px,
+      transparent 1px,
+      transparent 32px
+    ),
+    repeating-linear-gradient(
+      to top,
+      rgba(30, 41, 59, 0.6),
+      rgba(30, 41, 59, 0.6) 1px,
+      transparent 1px,
+      transparent 32px
+    ),
+    radial-gradient(circle at 0 100%, rgba(56, 189, 248, 0.4), transparent 55%),
+    linear-gradient(135deg, rgba(56, 189, 248, 0.25), rgba(15, 23, 42, 0.95));
+  opacity: 0.9;
+}
+
+.bg-stock-hero > * {
+  position: relative;
+}
+
+.glass-backdrop {
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}

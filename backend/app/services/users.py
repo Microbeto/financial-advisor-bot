@@ -1,0 +1,78 @@
+from __future__ import annotations
+
+from typing import List, Optional
+
+from .. import db
+from ..models import Role, UserPublic
+
+
+def get_user_public(user_id: str) -> Optional[UserPublic]:
+    users = db.require_col(db.users_col, "users")
+    oid = _obj_id(user_id)
+    if oid is None:
+        return None
+
+    doc = users.find_one({"_id": oid})
+    if not doc:
+        return None
+
+    return UserPublic(
+        user_id=str(doc["_id"]),
+        email=str(doc.get("email", "")),
+        role=str(doc.get("role", "user")),
+        created_at=doc.get("created_at"),
+    )
+
+
+def get_user_role(user_id: str) -> Role:
+    p = get_user_public(user_id)
+    if not p:
+        return "user"
+    role = str(p.role)
+    if role in ("premium", "admin", "manager"):
+        return role  # type: ignore[return-value]
+    return "user"
+
+
+def list_users(limit: int = 200) -> List[UserPublic]:
+    users = db.require_col(db.users_col, "users")
+    docs = list(users.find({}).sort([("created_at", -1)]).limit(max(1, int(limit))))
+    out: List[UserPublic] = []
+    for d in docs:
+        out.append(
+            UserPublic(
+                user_id=str(d.get("_id")),
+                email=str(d.get("email", "")),
+                role=str(d.get("role", "user")),
+                created_at=d.get("created_at"),
+            )
+        )
+    return out
+
+
+def update_user_role(user_id: str, role: Role) -> Optional[UserPublic]:
+    users = db.require_col(db.users_col, "users")
+    oid = _obj_id(user_id)
+    if oid is None:
+        return None
+
+    users.update_one({"_id": oid}, {"$set": {"role": role}})
+    return get_user_public(user_id)
+
+
+def delete_user(user_id: str) -> bool:
+    users = db.require_col(db.users_col, "users")
+    oid = _obj_id(user_id)
+    if oid is None:
+        return False
+
+    res = users.delete_one({"_id": oid})
+    return bool(res.deleted_count > 0)
+
+
+def _obj_id(s: str):
+    try:
+        from bson import ObjectId
+        return ObjectId(s)
+    except Exception:
+        return None

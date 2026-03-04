@@ -1,0 +1,15 @@
+{
+  "hints": {
+    "compat-api/css": "warning",
+    "typescript-config/is-valid": "off",
+    "typescript-config/consistent-casing": "off",
+    "meta-viewport": "off",
+    "no-inline-styles": "warning",
+    "axe/forms": "error",
+    "axe/language": "warning"
+  },
+  "ignoredUrls": [
+    "**/.next/**",
+    "**/node_modules/**"
+  ]
+}
