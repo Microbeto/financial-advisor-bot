@@ -37,7 +37,12 @@ export default function GoalsPage() {
         setLoading(true);
         const data = await getGoals();
         if (!cancelled) {
-          setGoals(data);
+          setGoals(
+            (data || []).map((g) => ({
+              ...g,
+              name: (g.name || "").trim().toLowerCase() === "retirement" ? "" : g.name,
+            })),
+          );
         }
       } catch (err) {
         console.error(err);
@@ -180,17 +185,19 @@ export default function GoalsPage() {
                   <td className="px-2 py-1">
                     <input
                       type="text"
+                      title="Goal full name"
                       value={g.name}
                       onChange={(e) =>
                         updateGoal(g.id, "name", e.target.value)
                       }
                       className="w-32 rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-50 focus:outline-none focus:ring-1 focus:ring-sky-500"
-                      placeholder="Retirement"
+                      placeholder="Full goal name"
                     />
                   </td>
                   <td className="px-2 py-1">
                     <input
                       type="number"
+                      title="Goal target amount"
                       value={g.target_amount}
                       onChange={(e) =>
                         updateGoal(g.id, "target_amount", e.target.value)
@@ -203,6 +210,7 @@ export default function GoalsPage() {
                   <td className="px-2 py-1">
                     <input
                       type="date"
+                      title="Goal target date"
                       value={toDateInputValue(g.target_date)}
                       onChange={(e) =>
                         updateGoal(g.id, "target_date", e.target.value)
@@ -212,6 +220,7 @@ export default function GoalsPage() {
                   </td>
                   <td className="px-2 py-1">
                     <select
+                      title="Goal priority"
                       value={g.priority}
                       onChange={(e) =>
                         updateGoal(g.id, "priority", e.target.value)
@@ -225,6 +234,7 @@ export default function GoalsPage() {
                   </td>
                   <td className="px-2 py-1">
                     <select
+                      title="Goal risk bucket"
                       value={g.risk_bucket}
                       onChange={(e) =>
                         updateGoal(g.id, "risk_bucket", e.target.value)

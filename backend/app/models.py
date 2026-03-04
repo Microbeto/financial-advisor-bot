@@ -139,6 +139,17 @@ class MarketHistoryResponse(BaseModel):
     bars: List[MarketBar] = Field(default_factory=list)
 
 
+class Holding(BaseModel):
+    symbol: str
+    quantity: float = 0.0
+    avg_price: float = 0.0
+
+
+class PortfolioSnapshot(BaseModel):
+    cash: float = 0.0
+    holdings: List[Holding] = Field(default_factory=list)
+
+
 class Annotation(BaseModel):
     t: int
     direction: TrendDirection

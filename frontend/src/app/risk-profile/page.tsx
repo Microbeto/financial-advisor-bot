@@ -159,6 +159,7 @@ export default function RiskProfilePage() {
   const [error, setError] = useState<string | null>(null);
   const [mlModels, setMlModels] = useState<MLModelInfo[]>([]);
   const [mlLoading, setMlLoading] = useState(false);
+  const [simModelId, setSimModelId] = useState<string | null>(null);
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateKey | null>(
     null,
   );
@@ -223,6 +224,17 @@ export default function RiskProfilePage() {
     };
   }, [canViewMlBacktest]);
 
+  useEffect(() => {
+    if (!mlModels.length) {
+      setSimModelId(null);
+      return;
+    }
+    const selected =
+      mlModels.find((m) => m.is_selected || m.selected) ??
+      [...mlModels].sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999))[0];
+    setSimModelId(selected?.model_id ?? null);
+  }, [mlModels]);
+
   function handleChange<K extends keyof RiskProfile>(key: K, value: RiskProfile[K]) {
     setProfile((prev) => ({
       ...prev,
@@ -278,7 +290,16 @@ export default function RiskProfilePage() {
   const currentRegime: RegimeKey = inferRegimeFromProfile(profile);
   const currentLimits = REGIME_LIMITS[currentRegime];
 
-  const selectedModel = mlModels.find((m) => m.selected) ?? null;
+  const rankedTopModels = [...mlModels]
+    .sort((a, b) => {
+      const ra = a.rank ?? 9999;
+      const rb = b.rank ?? 9999;
+      if (ra !== rb) return ra - rb;
+      return (b.score ?? 0) - (a.score ?? 0);
+    })
+    .slice(0, 10);
+
+  const selectedModel = rankedTopModels.find((m) => m.model_id === simModelId) ?? null;
   const baseReturnByRegime: Record<RegimeKey, number> = {
     conservative: 7.8,
     balanced: 10.6,
@@ -291,6 +312,12 @@ export default function RiskProfilePage() {
   };
   const restrictionPenalty = Math.min((profile.constraints?.length ?? 0) * 0.45, 2.6);
   const modelEdge = selectedModel ? (selectedModel.metrics.f1 - 0.5) * 8 : 0;
+  const constrainedF1 = selectedModel
+    ? Math.max(0, (selectedModel.metrics.f1 ?? 0) - restrictionPenalty * 0.01)
+    : 0;
+  const constrainedScore = selectedModel
+    ? Math.max(0, (selectedModel.score ?? 0) - restrictionPenalty * 0.02)
+    : 0;
   const simulatedAnnualReturn = Math.max(
     2.5,
     baseReturnByRegime[currentRegime] + modelEdge - restrictionPenalty,
@@ -534,7 +561,7 @@ export default function RiskProfilePage() {
                 {mlLoading
                   ? "Loading selected model metrics…"
                   : selectedModel
-                    ? `Selected model: ${selectedModel.model_name} (${selectedModel.model_type})`
+                    ? `Selected model: ${selectedModel.algorithm ?? selectedModel.model_name ?? selectedModel.model_id} (${selectedModel.family ?? selectedModel.model_type ?? "other"})`
                     : "No selected ML model found; simulation uses policy-only baseline."}
               </div>
               {selectedModel && (
@@ -543,6 +570,64 @@ export default function RiskProfilePage() {
                   <div>Precision: {(selectedModel.metrics.precision * 100).toFixed(1)}%</div>
                   <div>Recall: {(selectedModel.metrics.recall * 100).toFixed(1)}%</div>
                   <div>F1: {(selectedModel.metrics.f1 * 100).toFixed(1)}%</div>
+                </div>
+              )}
+
+              {selectedModel && (
+                <div className="mt-2 rounded-md border border-slate-800 bg-slate-900/60 p-2 text-[10px] text-slate-300">
+                  Constraint effect on selected model: adjusted F1 ≈ {(constrainedF1 * 100).toFixed(1)}% and adjusted score ≈ {constrainedScore.toFixed(3)} after applying {profile.constraints?.length ?? 0} active hard constraints.
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3 rounded-lg border border-slate-700 bg-slate-950/70 p-3 text-[11px] text-slate-300">
+              <div className="mb-2 text-slate-100">Top 10 ranked ML models (selection agent)</div>
+              {mlLoading ? (
+                <p className="text-[10px] text-slate-400">Loading ranked model list…</p>
+              ) : rankedTopModels.length === 0 ? (
+                <p className="text-[10px] text-slate-400">No ranked models available yet.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-left text-[10px] text-slate-300">
+                    <thead className="border-b border-slate-800 text-slate-400">
+                      <tr>
+                        <th className="px-2 py-1">Rank</th>
+                        <th className="px-2 py-1">Model</th>
+                        <th className="px-2 py-1">Family</th>
+                        <th className="px-2 py-1">Score</th>
+                        <th className="px-2 py-1">F1</th>
+                        <th className="px-2 py-1">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rankedTopModels.map((m) => {
+                        const active = m.model_id === simModelId;
+                        return (
+                          <tr key={m.model_id} className="border-b border-slate-900/80">
+                            <td className="px-2 py-1">#{m.rank ?? "-"}</td>
+                            <td className="px-2 py-1 font-mono">{m.algorithm ?? m.model_name ?? m.model_id}</td>
+                            <td className="px-2 py-1">{m.family ?? m.model_type ?? "other"}</td>
+                            <td className="px-2 py-1">{(m.score ?? 0).toFixed(3)}</td>
+                            <td className="px-2 py-1">{((m.metrics?.f1 ?? 0) * 100).toFixed(1)}%</td>
+                            <td className="px-2 py-1">
+                              <button
+                                type="button"
+                                onClick={() => setSimModelId(m.model_id)}
+                                className={[
+                                  "rounded-md border px-2 py-0.5",
+                                  active
+                                    ? "border-sky-500 bg-sky-900/40 text-sky-200"
+                                    : "border-slate-600 bg-slate-800 text-slate-200 hover:border-sky-500",
+                                ].join(" ")}
+                              >
+                                {active ? "Selected" : "Select"}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>

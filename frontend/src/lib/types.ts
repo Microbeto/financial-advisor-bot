@@ -210,20 +210,43 @@ export interface MLModelMetric {
   precision: number;
   recall: number;
   f1: number;
+  roc_auc?: number;
 }
 
 export interface MLModelInfo {
   model_id: string;
-  model_name: string;
-  model_type: string;
-  trained_on: string;
-  selected: boolean;
-  deployed: boolean;
+  algorithm?: string;
+  family?: string;
+  feature_type?: "numeric" | "text";
+  rank?: number;
+  score?: number;
+  sample_count?: number;
+  created_at?: string;
+  is_selected?: boolean;
+  is_deployed?: boolean;
+  underperforming?: boolean;
+
+  model_name?: string;
+  model_type?: string;
+  trained_on?: string;
+  selected?: boolean;
+  deployed?: boolean;
   metrics: MLModelMetric;
 }
 
 export interface MLModelListResponse {
   items: MLModelInfo[];
+}
+
+export interface MLPredictionItem {
+  symbol: string;
+  prediction: "up" | "down";
+  probability_up: number;
+}
+
+export interface MLPredictionResponse {
+  model_id: string;
+  items: MLPredictionItem[];
 }
 
 export interface MLRuntimeSettings {

@@ -12,6 +12,7 @@ from . import db
 from .models import (
     AnnotatedHistoryResponse,
     AuthResponse,
+    Holding,
     DashboardResponse,
     GlossaryResponse,
     GlossaryTermUpdateRequest,
@@ -32,6 +33,7 @@ from .models import (
     MLTrainingRequest,
     PolicyConstraintRequest,
     PolicyConstraintResponse,
+    PortfolioSnapshot,
     RateLimitUpdateRequest,
     RegisterRequest,
     RiskProfile,
@@ -43,6 +45,7 @@ from .models import (
     UserPublic,
 )
 from .services.market import get_annotated_history
+from .services.market import get_price_histories
 from .services.news import refresh_news_if_needed, refresh_top_news_of_day
 from .services.risk import (
     ensure_risk_profile_for_user,
@@ -172,6 +175,139 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="Financial Advisor Bot API", lifespan=lifespan)
 
+    async def _admin_default_portfolio() -> PortfolioSnapshot:
+        candidates = [
+            "SPY",
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "AMZN",
+            "GOOGL",
+            "META",
+            "JPM",
+            "UNH",
+            "XOM",
+            "TSLA",
+            "AVGO",
+            "AMD",
+            "NFLX",
+            "GS",
+            "COST",
+            "LLY",
+            "V",
+            "WMT",
+            "HD",
+        ]
+
+        try:
+            pred = await _maybe_await(predict_for_basket, candidates, lookback_days=30, model_id=None)
+            ranked = sorted(pred.items, key=lambda x: float(x.probability_up), reverse=True)
+            top = ranked[:10]
+        except Exception:
+            top = []
+
+        symbols = [x.symbol for x in top if getattr(x, "symbol", None)]
+        histories = await get_price_histories(symbols, days=35, concurrency=8) if symbols else {}
+
+        holdings: list[Holding] = []
+        for item in top:
+            sym = str(item.symbol).upper()
+            pts = (histories.get(sym) or {}).get("points") or []
+            last_close = 0.0
+            if pts:
+                try:
+                    last_close = float(pts[-1].get("c", 0.0) or 0.0)
+                except Exception:
+                    last_close = 0.0
+            if last_close <= 0:
+                last_close = 100.0
+            holdings.append(Holding(symbol=sym, quantity=1.0, avg_price=float(last_close)))
+
+        return PortfolioSnapshot(cash=0.0, holdings=holdings)
+
+    def _build_ml_audit_entries() -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+
+        try:
+            runs_col = db.require_col(db.ml_model_runs_col, "ml_model_runs")
+            runs = list(runs_col.find({}).sort([("created_at", -1)]).limit(200))
+        except Exception:
+            runs = []
+
+        try:
+            models_col = db.require_col(db.ml_models_col, "ml_models")
+            models = list(models_col.find({}).sort([("created_at", -1)]).limit(300))
+        except Exception:
+            models = []
+
+        idx = 1
+        for r in runs:
+            run_id = str(r.get("run_id") or "")
+            status = str(r.get("status") or "unknown")
+            stage = str(r.get("stage") or "")
+            result = r.get("result") or {}
+            selected_model_id = str(result.get("selected_model_id") or "")
+            trained_count = int(result.get("trained_count") or 0)
+            pruned_count = int(result.get("pruned_count") or 0)
+
+            created = r.get("created_at") or db.utc_now()
+            ts = created.isoformat() if hasattr(created, "isoformat") else str(created)
+            description = (
+                f"ML run {run_id} finished with status={status} stage={stage}. "
+                f"Trained {trained_count} models, selected={selected_model_id or 'none'}, pruned={pruned_count}."
+            )
+            entries.append(
+                {
+                    "id": idx,
+                    "timestamp": ts,
+                    "description": description,
+                    "num_recommendations": trained_count,
+                    "regime": "ml_training",
+                    "model_id": selected_model_id or None,
+                }
+            )
+            idx += 1
+
+        for m in models:
+            model_id = str(m.get("model_id") or "")
+            algo = str(m.get("algorithm") or "")
+            rank = int(m.get("rank") or 0)
+            score = float(m.get("score") or 0.0)
+            selected = bool(m.get("is_selected", False))
+            deployed = bool(m.get("is_deployed", False))
+            metrics = m.get("metrics") or {}
+            f1 = float(metrics.get("f1") or 0.0)
+
+            created = m.get("created_at") or db.utc_now()
+            ts = created.isoformat() if hasattr(created, "isoformat") else str(created)
+            how_applied = []
+            if selected:
+                how_applied.append("used for current prediction routing")
+            if deployed:
+                how_applied.append("deployed neural-network candidate")
+            applied_text = "; ".join(how_applied) if how_applied else "stored in model registry"
+
+            description = (
+                f"Model {model_id} ({algo}) created with rank={rank}, score={score:.3f}, f1={f1:.3f}; "
+                f"application: {applied_text}."
+            )
+            entries.append(
+                {
+                    "id": idx,
+                    "timestamp": ts,
+                    "description": description,
+                    "num_recommendations": 1,
+                    "regime": "ml_model",
+                    "model_id": model_id,
+                }
+            )
+            idx += 1
+
+        entries.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+        for i, e in enumerate(entries, start=1):
+            e["id"] = i
+        return entries[:300]
+
     origins = _parse_cors_origins()
     allow_credentials = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() == "true"
     if origins == ["*"]:
@@ -243,6 +379,67 @@ def create_app() -> FastAPI:
         claims = _claims_optional(authorization)
         uid = str(claims.get("uid")) if claims else PUBLIC_UID
         return upsert_risk_profile_for_user(uid, profile)
+
+    @app.get("/portfolio", response_model=PortfolioSnapshot)
+    async def portfolio_get(authorization: str | None = Header(default=None)):
+        await _acquire_limit("api_read")
+        claims = _claims_required(authorization)
+        uid = str(claims.get("uid", ""))
+        role = str(claims.get("role", "user"))
+
+        col = db.require_col(db.portfolio_snapshots_col, "portfolio_snapshots")
+        doc = col.find_one({"user_id": uid})
+        if doc:
+            doc.pop("_id", None)
+            doc.pop("user_id", None)
+            return PortfolioSnapshot(**doc)
+
+        if role == "admin":
+            generated = await _admin_default_portfolio()
+            payload = generated.model_dump()
+            col.update_one(
+                {"user_id": uid},
+                {"$set": {"user_id": uid, **payload, "updated_at": db.utc_now()}},
+                upsert=True,
+            )
+            return generated
+
+        return PortfolioSnapshot(cash=0.0, holdings=[])
+
+    @app.post("/portfolio", response_model=PortfolioSnapshot)
+    async def portfolio_post(snapshot: PortfolioSnapshot, authorization: str | None = Header(default=None)):
+        await _acquire_limit("api_write")
+        claims = _claims_required(authorization)
+        uid = str(claims.get("uid", ""))
+
+        payload = snapshot.model_dump()
+        col = db.require_col(db.portfolio_snapshots_col, "portfolio_snapshots")
+        col.update_one(
+            {"user_id": uid},
+            {"$set": {"user_id": uid, **payload, "updated_at": db.utc_now()}},
+            upsert=True,
+        )
+        return snapshot
+
+    @app.get("/audit-log")
+    async def audit_log_get(authorization: str | None = Header(default=None)):
+        await _acquire_limit("api_read")
+        claims = _claims_required(authorization)
+        require_roles(claims, ("premium", "admin", "manager"))
+        return _build_ml_audit_entries()
+
+    @app.post("/audit-log/clear")
+    async def audit_log_clear(authorization: str | None = Header(default=None)):
+        await _acquire_limit("api_write")
+        claims = _claims_required(authorization)
+        require_roles(claims, ("admin",))
+
+        try:
+            col = db.require_col(db.audit_logs_col, "audit_logs")
+            col.delete_many({})
+        except Exception:
+            pass
+        return {"status": "ok"}
 
     @app.get("/dashboard/public", response_model=DashboardResponse)
     async def dashboard_public():

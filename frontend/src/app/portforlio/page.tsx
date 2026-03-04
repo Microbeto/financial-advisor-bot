@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Holding, PortfolioSnapshot } from "@/lib/types";
-import { getPortfolio, savePortfolio } from "@/lib/api-client";
+import { getPortfolio, mlPredict, savePortfolio } from "@/lib/api-client";
 import { RequireAuth } from "@/components/require-auth";
 import { useAuth } from "@/lib/auth-context";
 
@@ -14,11 +14,26 @@ function makeEmptyHolding(): Holding {
   };
 }
 
+  function allocationWidthClass(pct: number): string {
+    if (pct <= 0) return "w-0";
+    if (pct <= 10) return "w-1/12";
+    if (pct <= 20) return "w-2/12";
+    if (pct <= 30) return "w-3/12";
+    if (pct <= 40) return "w-4/12";
+    if (pct <= 50) return "w-5/12";
+    if (pct <= 60) return "w-6/12";
+    if (pct <= 70) return "w-7/12";
+    if (pct <= 80) return "w-8/12";
+    if (pct <= 90) return "w-9/12";
+    return "w-full";
+  }
+
 export default function PortfolioPage() {
   const { role } = useAuth();
   const [portfolio, setPortfolio] = useState<PortfolioSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [autofilling, setAutofilling] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,6 +62,68 @@ export default function PortfolioPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fillAdminPortfolio() {
+      if (role !== "admin" || !portfolio) return;
+      if ((portfolio.holdings ?? []).length > 0) return;
+
+      const basket = [
+        "SPY",
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "AMZN",
+        "GOOGL",
+        "META",
+        "JPM",
+        "UNH",
+        "XOM",
+        "TSLA",
+        "AVGO",
+        "AMD",
+        "NFLX",
+        "GS",
+        "COST",
+        "LLY",
+        "V",
+        "WMT",
+        "HD",
+      ];
+
+      try {
+        setAutofilling(true);
+        const pred = await mlPredict({ stock_basket: basket, lookback_days: 30 });
+        const top = [...(pred.items ?? [])]
+          .sort((a, b) => b.probability_up - a.probability_up)
+          .slice(0, 10);
+
+        const autoHoldings: Holding[] = top.map((item) => ({
+          symbol: item.symbol,
+          quantity: 1,
+          avg_price: 100,
+        }));
+
+        const next: PortfolioSnapshot = { ...portfolio, holdings: autoHoldings };
+        const saved = await savePortfolio(next);
+        if (!cancelled) {
+          setPortfolio(saved);
+          setMessage("Admin portfolio auto-filled with top 10 ML picks from the past month.");
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        if (!cancelled) setAutofilling(false);
+      }
+    }
+
+    fillAdminPortfolio();
+    return () => {
+      cancelled = true;
+    };
+  }, [role, portfolio]);
 
   function updateHolding(index: number, field: keyof Holding, value: string) {
     if (!portfolio) return;
@@ -159,6 +236,12 @@ export default function PortfolioPage() {
             </p>
           )}
 
+          {autofilling && (
+            <p className="text-xs text-slate-400">
+              Building admin holdings from top ML opportunities over the past month…
+            </p>
+          )}
+
           {error && (
             <p className="text-xs text-red-400">
               {error}
@@ -179,6 +262,7 @@ export default function PortfolioPage() {
                 </label>
                 <input
                   type="number"
+                  title="Cash balance"
                   value={portfolio.cash}
                   onChange={(e) =>
                     setPortfolio({
@@ -229,6 +313,7 @@ export default function PortfolioPage() {
                           <td className="px-2 py-1">
                             <input
                               type="text"
+                              title="Holding symbol"
                               value={h.symbol}
                               onChange={(e) =>
                                 updateHolding(idx, "symbol", e.target.value)
@@ -241,6 +326,7 @@ export default function PortfolioPage() {
                           <td className="px-2 py-1">
                             <input
                               type="number"
+                              title="Holding quantity"
                               value={h.quantity}
                               onChange={(e) =>
                                 updateHolding(idx, "quantity", e.target.value)
@@ -253,6 +339,7 @@ export default function PortfolioPage() {
                           <td className="px-2 py-1">
                             <input
                               type="number"
+                              title="Holding average price"
                               value={h.avg_price}
                               onChange={(e) =>
                                 updateHolding(idx, "avg_price", e.target.value)
@@ -275,8 +362,7 @@ export default function PortfolioPage() {
                                 </div>
                                 <div className="h-1.5 overflow-hidden rounded-full bg-slate-800">
                                   <div
-                                    className="h-full bg-sky-500"
-                                    style={{ width: `${Math.max(0, Math.min(100, allocationPct))}%` }}
+                                    className={["h-full bg-sky-500", allocationWidthClass(allocationPct)].join(" ")}
                                   />
                                 </div>
                               </div>

@@ -13,6 +13,7 @@ import type {
   AnnotatedHistoryResponse,
   DashboardResponse,
   MLModelListResponse,
+  MLPredictionResponse,
   MLRuntimeSettings,
   MLRuntimeSettingsUpdate,
 } from "./types";
@@ -407,7 +408,27 @@ export async function getMlModels() {
   const res = await request<MLModelListResponse>("/ml/models", {
     retry: { attempts: 1 },
   });
-  return res.items ?? [];
+  return (res.items ?? []).map((item) => ({
+    ...item,
+    model_name: item.model_name ?? item.algorithm ?? item.model_id,
+    model_type: item.model_type ?? item.family ?? "other",
+    selected: item.selected ?? item.is_selected ?? false,
+    deployed: item.deployed ?? item.is_deployed ?? false,
+    trained_on: item.trained_on ?? item.created_at ?? "",
+  }));
+}
+
+export async function mlPredict(payload: {
+  stock_basket: string[];
+  lookback_days?: number;
+  model_id?: string;
+}) {
+  return request<MLPredictionResponse>("/ml/predict", {
+    method: "POST",
+    body: payload,
+    timeoutMs: 90000,
+    retry: { attempts: 2, baseDelayMs: 400, maxDelayMs: 3000 },
+  });
 }
 
 /** ML runtime settings (admin) */
