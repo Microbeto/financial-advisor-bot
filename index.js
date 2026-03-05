@@ -22,6 +22,15 @@ const STARTUP_TIMEOUT_MS = Number(process.env.STARTUP_TIMEOUT_MS || "30000");
 const HEALTH_POLL_MS = Number(process.env.HEALTH_POLL_MS || "400");
 const FORCE_KILL_WAIT_MS = Number(process.env.FORCE_KILL_WAIT_MS || "1500");
 
+const START_ML_ON_BOOT = (process.env.START_ML_ON_BOOT ?? "1").trim().toLowerCase() !== "0";
+const ML_BOOT_LOOKBACK_DAYS = Number(process.env.ML_BOOT_LOOKBACK_DAYS || "240");
+const ML_BOOT_LABEL_HORIZON_DAYS = Number(process.env.ML_BOOT_LABEL_HORIZON_DAYS || "5");
+const ML_BOOT_TEST_SIZE = Number(process.env.ML_BOOT_TEST_SIZE || "0.25");
+const ML_BOOT_RANDOM_SEED = Number(process.env.ML_BOOT_RANDOM_SEED || "42");
+const ML_BOOT_BASKET =
+  process.env.ML_BOOT_BASKET ||
+  "SPY,AAPL,MSFT,NVDA,AMZN,GOOGL,META,JPM,UNH,XOM,TSLA,AVGO,AMD,NFLX,GS";
+
 function isWin() {
   return process.platform === "win32";
 }
@@ -77,6 +86,47 @@ function runProcess(name, command, args, cwd, extraEnv = {}, shellMode = false) 
   });
 
   return child;
+}
+
+function parseBasketCsv(raw) {
+  return String(raw || "")
+    .split(",")
+    .map((x) => x.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function triggerMlTraining(py, cwd, extraEnv = {}) {
+  const basket = parseBasketCsv(ML_BOOT_BASKET);
+  if (!basket.length) {
+    warn("[ml] startup training skipped: empty ML_BOOT_BASKET");
+    return null;
+  }
+
+  const pyCode = [
+    "import asyncio",
+    "from app import db",
+    "from app.models import MLTrainingRequest",
+    "from app.services.ml_workflow import train_models_async",
+    `basket=${JSON.stringify(basket)}`,
+    `lookback_days=${Number.isFinite(ML_BOOT_LOOKBACK_DAYS) ? ML_BOOT_LOOKBACK_DAYS : 240}`,
+    `label_horizon_days=${Number.isFinite(ML_BOOT_LABEL_HORIZON_DAYS) ? ML_BOOT_LABEL_HORIZON_DAYS : 5}`,
+    `test_size=${Number.isFinite(ML_BOOT_TEST_SIZE) ? ML_BOOT_TEST_SIZE : 0.25}`,
+    `random_seed=${Number.isFinite(ML_BOOT_RANDOM_SEED) ? ML_BOOT_RANDOM_SEED : 42}`,
+    "db.init_db()",
+    "req=MLTrainingRequest(stock_basket=basket,lookback_days=int(lookback_days),label_horizon_days=int(label_horizon_days),test_size=float(test_size),random_seed=int(random_seed),run_async=True)",
+    "res=asyncio.run(train_models_async(req))",
+    "print(f'[ml] startup training completed: run_id={res.run_id} selected={res.selected_model_id} trained={len(res.trained_models)}')",
+    "db.close_db()",
+  ].join("; ");
+
+  const shellMode = py.isAbsolute ? false : isWin();
+  log("[ml] starting startup training job");
+  const trainer = runProcess("ml-startup-train", py.cmd, ["-c", pyCode], cwd, extraEnv, shellMode);
+  trainer.on("exit", (code) => {
+    if (code === 0) log("[ml] startup training job finished");
+    else warn(`[ml] startup training job exited with code ${code}`);
+  });
+  return trainer;
 }
 
 function killProcessTree(child) {
@@ -236,6 +286,14 @@ async function main() {
     log("[backend] healthy");
   } else {
     log(`[backend] already running on http://${BACKEND_HOST}:${BACKEND_PORT}`);
+  }
+
+  if (START_ML_ON_BOOT) {
+    const py = pickPythonExe();
+    const trainer = triggerMlTraining(py, BACKEND_CWD, backendEnv);
+    if (trainer) children.push(trainer);
+  } else {
+    log("[ml] startup training disabled (START_ML_ON_BOOT=0)");
   }
 
   // Frontend env: set NEXT_PUBLIC_API_BASE_URL so the browser hits the right backend.

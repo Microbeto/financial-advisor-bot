@@ -42,6 +42,7 @@ except Exception:
 
 
 ML_MODEL_MAX_COUNT = int(os.getenv("ML_MODEL_MAX_COUNT", "10"))
+ML_SELECTED_TOP_K = int(os.getenv("ML_SELECTED_TOP_K", "3"))
 WALK_FORWARD_SPLITS = int(os.getenv("ML_WALK_FORWARD_SPLITS", "5"))
 WALK_FORWARD_MIN_TRAIN = int(os.getenv("ML_WALK_FORWARD_MIN_TRAIN", "120"))
 
@@ -920,14 +921,6 @@ def _predict_stacking_model(model_bundle: Dict[str, Any], X: np.ndarray) -> np.n
 
 async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, model_id: Optional[str] = None) -> MLPredictionResponse:
     symbols = list(dict.fromkeys([(s or "").upper().strip() for s in stock_basket if (s or "").strip()]))
-    doc = _selected_or_latest_model(model_id)
-    if not doc:
-        if model_id:
-            raise RuntimeError(f"Requested model_id not found: {model_id}")
-        raise RuntimeError("No selected model is available. Select the best model before prediction.")
-
-    model = _load_model(doc)
-
     items: List[MLPredictionItem] = []
     histories = await get_price_histories(symbols, days=max(30, int(lookback_days)), concurrency=8)
     today = iso_date_utc()
@@ -944,21 +937,64 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
         X_num.append(feats)
 
     if not X_num:
-        return MLPredictionResponse(model_id=str(doc.get("model_id")), items=[])
+        return MLPredictionResponse(model_id=(model_id or "selected"), items=[])
 
     arr = np.array(X_num, dtype=float)
-    algo = str(doc.get("algorithm") or "")
-    if algo == "stacking_meta" and isinstance(model, dict):
-        probs = _predict_stacking_model(model, arr)
-    else:
-        probs = _predict_proba_or_hard(model, arr)
+
+    if model_id:
+        doc = _selected_or_latest_model(model_id)
+        if not doc:
+            raise RuntimeError(f"Requested model_id not found: {model_id}")
+        model = _load_model(doc)
+        algo = str(doc.get("algorithm") or "")
+        if algo == "stacking_meta" and isinstance(model, dict):
+            probs = _predict_stacking_model(model, arr)
+        else:
+            probs = _predict_proba_or_hard(model, arr)
+
+        preds = np.where(probs >= 0.5, 1, 0)
+        for i, sym in enumerate(valid_symbols):
+            p_up = float(probs[i]) if i < len(probs) else (1.0 if int(preds[i]) == 1 else 0.0)
+            items.append(MLPredictionItem(symbol=sym, prediction=("up" if int(preds[i]) == 1 else "down"), probability_up=max(0.0, min(1.0, p_up))))
+
+        return MLPredictionResponse(model_id=str(doc.get("model_id")), items=items)
+
+    col = _registry_col()
+    selected_docs = list(col.find({"is_selected": True}).sort([("score", -1), ("created_at", -1)]))
+    if not selected_docs:
+        fallback = _selected_or_latest_model(model_id=None)
+        if fallback:
+            selected_docs = [fallback]
+    selected_docs = selected_docs[: max(1, int(ML_SELECTED_TOP_K))]
+
+    model_probs: List[np.ndarray] = []
+    used_ids: List[str] = []
+
+    for d in selected_docs:
+        try:
+            model = _load_model(d)
+            algo = str(d.get("algorithm") or "")
+            if algo == "stacking_meta" and isinstance(model, dict):
+                probs_i = _predict_stacking_model(model, arr)
+            else:
+                probs_i = _predict_proba_or_hard(model, arr)
+            model_probs.append(np.asarray(probs_i, dtype=float))
+            used_ids.append(str(d.get("model_id") or ""))
+        except Exception:
+            continue
+
+    if not model_probs:
+        raise RuntimeError("No selected model is available. Select the best model before prediction.")
+
+    probs = np.mean(np.column_stack(model_probs), axis=1)
 
     preds = np.where(probs >= 0.5, 1, 0)
     for i, sym in enumerate(valid_symbols):
         p_up = float(probs[i]) if i < len(probs) else (1.0 if int(preds[i]) == 1 else 0.0)
         items.append(MLPredictionItem(symbol=sym, prediction=("up" if int(preds[i]) == 1 else "down"), probability_up=max(0.0, min(1.0, p_up))))
 
-    return MLPredictionResponse(model_id=str(doc.get("model_id")), items=items)
+    mix_id = ",".join([x for x in used_ids if x])
+    return MLPredictionResponse(model_id=(f"mix[{mix_id}]" if mix_id else "mix[selected]"), items=items)
 
 
 async def deploy_neural_network(model_id: Optional[str] = None) -> MLDeployResponse:
@@ -1092,7 +1128,7 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
 
     _ml_log("stage: selecting best model")
     runs.update_one({"run_id": run_id}, {"$set": {"stage": "selecting_best"}})
-    selection = select_best_models(top_k=1)
+    selection = select_best_models(top_k=max(1, int(ML_SELECTED_TOP_K)))
 
     _ml_log("stage: pruning underperforming models")
     runs.update_one({"run_id": run_id}, {"$set": {"stage": "pruning_underperforming"}})
