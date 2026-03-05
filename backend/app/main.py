@@ -177,6 +177,41 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="Financial Advisor Bot API", lifespan=lifespan)
 
+    def _price_for_buy_date(points: list[dict[str, Any]], buy_date: str) -> float:
+        if not points:
+            return 0.0
+
+        exact_price = 0.0
+        prior_price = 0.0
+        for p in points:
+            t_raw = str(p.get("t") or "")
+            d = t_raw[:10]
+            try:
+                c = float(p.get("c", 0.0) or 0.0)
+            except Exception:
+                c = 0.0
+            if c <= 0.0:
+                continue
+            if d == buy_date:
+                exact_price = c
+                break
+            if d and d < buy_date:
+                prior_price = c
+
+        if exact_price > 0.0:
+            return float(exact_price)
+        if prior_price > 0.0:
+            return float(prior_price)
+
+        for p in points:
+            try:
+                c = float(p.get("c", 0.0) or 0.0)
+            except Exception:
+                c = 0.0
+            if c > 0.0:
+                return float(c)
+        return 0.0
+
     async def _admin_default_portfolio() -> PortfolioSnapshot:
         candidates = [
             "SPY",
@@ -208,22 +243,18 @@ def create_app() -> FastAPI:
         except Exception:
             top = []
 
+        buy_date = "2025-03-13"
         symbols = [x.symbol for x in top if getattr(x, "symbol", None)]
-        histories = await get_price_histories(symbols, days=35, concurrency=8) if symbols else {}
+        histories = await get_price_histories(symbols, days=520, concurrency=8) if symbols else {}
 
         holdings: list[Holding] = []
         for item in top:
             sym = str(item.symbol).upper()
             pts = (histories.get(sym) or {}).get("points") or []
-            last_close = 0.0
-            if pts:
-                try:
-                    last_close = float(pts[-1].get("c", 0.0) or 0.0)
-                except Exception:
-                    last_close = 0.0
-            if last_close <= 0:
-                last_close = 100.0
-            holdings.append(Holding(symbol=sym, quantity=1.0, avg_price=float(last_close)))
+            buy_price = _price_for_buy_date(pts, buy_date)
+            if buy_price <= 0:
+                buy_price = 100.0
+            holdings.append(Holding(symbol=sym, quantity=100.0, avg_price=float(buy_price)))
 
         return PortfolioSnapshot(cash=0.0, holdings=holdings)
 

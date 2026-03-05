@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Holding, PortfolioSnapshot } from "@/lib/types";
-import { getPortfolio, mlPredict, savePortfolio } from "@/lib/api-client";
+import { getMarketHistory, getPortfolio, mlPredict, savePortfolio } from "@/lib/api-client";
 import { RequireAuth } from "@/components/require-auth";
 import { useAuth } from "@/lib/auth-context";
 
@@ -27,6 +27,33 @@ function makeEmptyHolding(): Holding {
     if (pct <= 90) return "w-9/12";
     return "w-full";
   }
+
+function buyPriceFromHistory(raw: unknown, buyDate: string): number {
+  const parsed = raw as { points?: Array<{ t?: string; c?: number }> };
+  const points = Array.isArray(parsed?.points) ? parsed.points : [];
+  if (!points.length) return 0;
+
+  let exact = 0;
+  let prior = 0;
+  for (const p of points) {
+    const d = String(p?.t || "").slice(0, 10);
+    const c = Number(p?.c || 0);
+    if (!Number.isFinite(c) || c <= 0) continue;
+    if (d === buyDate) {
+      exact = c;
+      break;
+    }
+    if (d && d < buyDate) {
+      prior = c;
+    }
+  }
+
+  if (exact > 0) return exact;
+  if (prior > 0) return prior;
+
+  const firstValid = points.find((p) => Number.isFinite(Number(p?.c || 0)) && Number(p?.c || 0) > 0);
+  return Number(firstValid?.c || 0);
+}
 
 export default function PortfolioPage() {
   const { role } = useAuth();
@@ -69,6 +96,7 @@ export default function PortfolioPage() {
     async function fillAdminPortfolio() {
       if (role !== "admin" || !portfolio) return;
       if ((portfolio.holdings ?? []).length > 0) return;
+      const buyDate = "2025-03-13";
 
       const basket = [
         "SPY",
@@ -100,17 +128,30 @@ export default function PortfolioPage() {
           .sort((a, b) => b.probability_up - a.probability_up)
           .slice(0, 10);
 
+        const prices = new Map<string, number>();
+        await Promise.all(
+          top.map(async (item) => {
+            try {
+              const hist = await getMarketHistory(item.symbol, 520);
+              const px = buyPriceFromHistory(hist, buyDate);
+              prices.set(item.symbol, px > 0 ? px : 100);
+            } catch {
+              prices.set(item.symbol, 100);
+            }
+          })
+        );
+
         const autoHoldings: Holding[] = top.map((item) => ({
           symbol: item.symbol,
-          quantity: 1,
-          avg_price: 100,
+          quantity: 100,
+          avg_price: prices.get(item.symbol) ?? 100,
         }));
 
         const next: PortfolioSnapshot = { ...portfolio, holdings: autoHoldings };
         const saved = await savePortfolio(next);
         if (!cancelled) {
           setPortfolio(saved);
-          setMessage("Admin portfolio auto-filled with top 10 ML picks from the past month.");
+          setMessage("Admin portfolio auto-filled: quantity 100 and buy-date (2025-03-13) average prices.");
         }
       } catch (err) {
         console.error(err);
@@ -238,7 +279,7 @@ export default function PortfolioPage() {
 
           {autofilling && (
             <p className="text-xs text-slate-400">
-              Building admin holdings from top ML opportunities over the past month…
+              Building admin holdings from top ML opportunities with buy-date (2025-03-13) baseline…
             </p>
           )}
 
