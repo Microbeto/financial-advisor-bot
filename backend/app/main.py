@@ -3,13 +3,18 @@ from __future__ import annotations
 import inspect
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import db
 from .models import (
+    AdminUserDetailResponse,
+    AdminUserExportResponse,
+    AdminUserStateResetResponse,
+    AdminUserStatusUpdateRequest,
     AnnotatedHistoryResponse,
     AuthResponse,
     Holding,
@@ -176,6 +181,40 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Financial Advisor Bot API", lifespan=lifespan)
+
+    def _obj_id(s: str):
+        try:
+            from bson import ObjectId
+
+            return ObjectId(s)
+        except Exception:
+            return None
+
+    def _to_dt(v: Any) -> datetime | None:
+        if isinstance(v, datetime):
+            return v.astimezone(timezone.utc)
+        if isinstance(v, str) and v:
+            try:
+                return datetime.fromisoformat(v.replace("Z", "+00:00")).astimezone(timezone.utc)
+            except Exception:
+                return None
+        return None
+
+    def _log_user_error(user_id: str | None, path: str, method: str, message: str) -> None:
+        try:
+            col = db.require_col(db.audit_logs_col, "audit_logs")
+            col.insert_one(
+                {
+                    "user_id": user_id,
+                    "level": "error",
+                    "path": path,
+                    "method": method,
+                    "message": str(message)[:1000],
+                    "created_at": db.utc_now(),
+                }
+            )
+        except Exception:
+            return
 
     def _price_for_buy_date(points: list[dict[str, Any]], buy_date: str) -> float:
         if not points:
@@ -368,6 +407,21 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def capture_user_errors(request: Request, call_next):
+        try:
+            return await call_next(request)
+        except Exception as exc:
+            user_id: str | None = None
+            try:
+                claims = _claims_optional(request.headers.get("authorization"))
+                if claims:
+                    user_id = str(claims.get("uid", "") or "") or None
+            except Exception:
+                user_id = None
+            _log_user_error(user_id, request.url.path, request.method, str(exc))
+            raise
 
     @app.get("/health")
     async def health():
@@ -748,6 +802,239 @@ def create_app() -> FastAPI:
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
         return UserListResponse(items=list_users())
+
+    @app.get("/admin/users/{user_id}/detail", response_model=AdminUserDetailResponse)
+    async def admin_user_detail(user_id: str, authorization: str | None = Header(default=None)):
+        await _acquire_limit("api_ml_admin")
+        claims = _claims_required(authorization)
+        require_roles(claims, ("admin",))
+
+        users_col = db.require_col(db.users_col, "users")
+        risk_col = db.require_col(db.risk_profiles_col, "risk_profiles")
+        dash_col = db.require_col(db.dashboard_cache_col, "dashboard_cache")
+        signals_col = db.require_col(db.daily_signals_col, "daily_signals")
+        audit_col = db.require_col(db.audit_logs_col, "audit_logs")
+
+        oid = _obj_id(user_id)
+        if oid is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        doc = users_col.find_one({"_id": oid})
+        if not doc:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        risk_doc = risk_col.find_one({"user_id": user_id}) or {}
+        custom_universe = get_user_custom_universe(user_id)
+
+        dash_latest = dash_col.find_one({"user_id": user_id}, sort=[("date", -1)]) or {}
+        signal_latest = signals_col.find_one({"user_id": user_id}, sort=[("date", -1)]) or {}
+
+        last_dashboard_at = _to_dt(dash_latest.get("cached_at"))
+        if last_dashboard_at is None:
+            last_dashboard_at = _to_dt(signal_latest.get("cached_at"))
+
+        status_val = str(doc.get("account_status", "active") or "active").lower()
+        failed_login_attempts = int(doc.get("failed_login_attempts", 0) or 0)
+        locked_until = _to_dt(doc.get("locked_until"))
+        now = datetime.now(timezone.utc)
+        security_status = "suspended" if status_val == "suspended" else "active"
+        if locked_until and locked_until > now and security_status != "suspended":
+            security_status = "locked"
+
+        rate_limit_state: Dict[str, Any] = {"currently_limited": False, "buckets": {}}
+        try:
+            from .core.rate_limit import limiter  # type: ignore
+
+            buckets: Dict[str, Any] = {}
+            currently_limited = False
+            for key, bucket in getattr(limiter, "_buckets", {}).items():
+                tokens = float(getattr(bucket, "tokens", 0.0))
+                capacity = int(getattr(bucket, "capacity", 0) or 0)
+                buckets[str(key)] = {
+                    "tokens": round(tokens, 3),
+                    "capacity": capacity,
+                    "near_limit": bool(tokens < 1.0),
+                }
+                if tokens < 1.0:
+                    currently_limited = True
+            rate_limit_state = {"currently_limited": currently_limited, "buckets": buckets}
+        except Exception:
+            pass
+
+        error_docs = list(audit_col.find({"user_id": user_id, "level": "error"}).sort([("created_at", -1)]).limit(25))
+        error_logs: list[dict[str, Any]] = []
+        for e in error_docs:
+            error_logs.append(
+                {
+                    "timestamp": e.get("created_at"),
+                    "path": str(e.get("path") or ""),
+                    "method": str(e.get("method") or ""),
+                    "message": str(e.get("message") or ""),
+                }
+            )
+
+        return AdminUserDetailResponse(
+            user_id=user_id,
+            email=str(doc.get("email") or ""),
+            role=str(doc.get("role") or "user"),
+            created_at=doc.get("created_at") or db.utc_now(),
+            security={
+                "status": security_status,
+                "failed_login_attempts": failed_login_attempts,
+                "locked_until": locked_until,
+            },
+            financial_context={
+                "risk_tolerance": str(risk_doc.get("risk_tolerance") or "balanced"),
+                "horizon_years": risk_doc.get("horizon_years"),
+                "max_drawdown_pct": risk_doc.get("max_drawdown_pct"),
+                "constraints": list(risk_doc.get("constraints") or []),
+                "custom_universe": custom_universe,
+            },
+            activity={
+                "last_login_at": _to_dt(doc.get("last_login_at")),
+                "last_dashboard_at": last_dashboard_at,
+            },
+            rate_limit=rate_limit_state,
+            error_logs=error_logs,
+        )
+
+    @app.put("/admin/users/{user_id}/status")
+    async def admin_user_status(user_id: str, req: AdminUserStatusUpdateRequest, authorization: str | None = Header(default=None)):
+        await _acquire_limit("api_ml_admin")
+        claims = _claims_required(authorization)
+        require_roles(claims, ("admin",))
+
+        users_col = db.require_col(db.users_col, "users")
+        oid = _obj_id(user_id)
+        if oid is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        now = datetime.now(timezone.utc)
+        if req.status == "active":
+            update = {"account_status": "active", "failed_login_attempts": 0, "locked_until": None}
+        elif req.status == "suspended":
+            update = {"account_status": "suspended"}
+        else:
+            mins = max(1, int(req.lock_minutes))
+            update = {"account_status": "active", "locked_until": now + timedelta(minutes=mins)}
+
+        res = users_col.update_one({"_id": oid}, {"$set": update})
+        if res.matched_count <= 0:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        return {"ok": True, "user_id": user_id, "status": req.status}
+
+    @app.post("/admin/users/{user_id}/reset-state", response_model=AdminUserStateResetResponse)
+    async def admin_user_reset_state(user_id: str, authorization: str | None = Header(default=None)):
+        await _acquire_limit("api_ml_admin")
+        claims = _claims_required(authorization)
+        require_roles(claims, ("admin",))
+
+        signals_col = db.require_col(db.daily_signals_col, "daily_signals")
+        dash_col = db.require_col(db.dashboard_cache_col, "dashboard_cache")
+
+        r1 = signals_col.delete_many({"user_id": user_id})
+        r2 = dash_col.delete_many({"user_id": user_id})
+        return AdminUserStateResetResponse(
+            ok=True,
+            cleared_daily_signals=int(r1.deleted_count or 0),
+            cleared_dashboard_cache=int(r2.deleted_count or 0),
+        )
+
+    @app.get("/admin/users/{user_id}/export", response_model=AdminUserExportResponse)
+    async def admin_user_export(user_id: str, authorization: str | None = Header(default=None)):
+        await _acquire_limit("api_ml_admin")
+        claims = _claims_required(authorization)
+        require_roles(claims, ("admin",))
+
+        users_col = db.require_col(db.users_col, "users")
+        risk_col = db.require_col(db.risk_profiles_col, "risk_profiles")
+        portfolio_col = db.require_col(db.portfolio_snapshots_col, "portfolio_snapshots")
+        signals_col = db.require_col(db.daily_signals_col, "daily_signals")
+        dash_col = db.require_col(db.dashboard_cache_col, "dashboard_cache")
+        audit_col = db.require_col(db.audit_logs_col, "audit_logs")
+
+        oid = _obj_id(user_id)
+        if oid is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user_doc = users_col.find_one({"_id": oid})
+        if not user_doc:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user_export = {
+            "user_id": user_id,
+            "email": str(user_doc.get("email") or ""),
+            "role": str(user_doc.get("role") or "user"),
+            "created_at": user_doc.get("created_at"),
+            "account_status": str(user_doc.get("account_status") or "active"),
+            "failed_login_attempts": int(user_doc.get("failed_login_attempts", 0) or 0),
+            "locked_until": _to_dt(user_doc.get("locked_until")),
+            "last_login_at": _to_dt(user_doc.get("last_login_at")),
+        }
+
+        risk_doc = risk_col.find_one({"user_id": user_id}) or {}
+        risk_doc.pop("_id", None)
+        portfolio_doc = portfolio_col.find_one({"user_id": user_id}) or {}
+        portfolio_doc.pop("_id", None)
+        portfolio_doc.pop("user_id", None)
+
+        signals = list(signals_col.find({"user_id": user_id}).sort([("date", -1)]).limit(30))
+        for x in signals:
+            x.pop("_id", None)
+            x.pop("user_id", None)
+
+        dashboards = list(dash_col.find({"user_id": user_id}).sort([("date", -1)]).limit(30))
+        for x in dashboards:
+            x.pop("_id", None)
+            x.pop("user_id", None)
+
+        errs = list(audit_col.find({"user_id": user_id, "level": "error"}).sort([("created_at", -1)]).limit(50))
+        for x in errs:
+            x.pop("_id", None)
+
+        return AdminUserExportResponse(
+            user=user_export,
+            risk_profile=risk_doc,
+            portfolio=portfolio_doc,
+            custom_universe=get_user_custom_universe(user_id),
+            daily_signals=signals,
+            dashboard_cache=dashboards,
+            error_logs=errs,
+        )
+
+    @app.delete("/admin/users/{user_id}/purge")
+    async def admin_user_purge(user_id: str, authorization: str | None = Header(default=None)):
+        await _acquire_limit("api_ml_admin")
+        claims = _claims_required(authorization)
+        require_roles(claims, ("admin",))
+
+        users_col = db.require_col(db.users_col, "users")
+        risk_col = db.require_col(db.risk_profiles_col, "risk_profiles")
+        portfolio_col = db.require_col(db.portfolio_snapshots_col, "portfolio_snapshots")
+        signals_col = db.require_col(db.daily_signals_col, "daily_signals")
+        dash_col = db.require_col(db.dashboard_cache_col, "dashboard_cache")
+        audit_col = db.require_col(db.audit_logs_col, "audit_logs")
+
+        oid = _obj_id(user_id)
+        if oid is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        deleted = {
+            "users": int(users_col.delete_one({"_id": oid}).deleted_count or 0),
+            "risk_profiles": int(risk_col.delete_many({"user_id": user_id}).deleted_count or 0),
+            "portfolio_snapshots": int(portfolio_col.delete_many({"user_id": user_id}).deleted_count or 0),
+            "daily_signals": int(signals_col.delete_many({"user_id": user_id}).deleted_count or 0),
+            "dashboard_cache": int(dash_col.delete_many({"user_id": user_id}).deleted_count or 0),
+            "audit_logs": int(audit_col.delete_many({"user_id": user_id}).deleted_count or 0),
+        }
+
+        try:
+            db.get_db()["user_universe"].delete_many({"user_id": user_id})
+        except Exception:
+            pass
+
+        return {"ok": True, "deleted": deleted}
 
     @app.put("/admin/users/{user_id}/role")
     async def admin_update_user_role(user_id: str, req: RoleUpdateRequest, authorization: str | None = Header(default=None)):

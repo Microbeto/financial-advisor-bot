@@ -279,3 +279,40 @@ export interface MLTournamentStatsResponse {
   winner_name?: string | null;
   competitor_stats: Record<string, MLTournamentCompetitorStat>;
 }
+
+export type AccountStatus = "active" | "suspended" | "locked";
+
+export interface AdminUserErrorItem {
+  timestamp?: string | null;
+  path: string;
+  method: string;
+  message: string;
+}
+
+export interface AdminUserDetail {
+  user_id: string;
+  email: string;
+  role: UserRole | string;
+  created_at?: string;
+  security: {
+    status: AccountStatus;
+    failed_login_attempts: number;
+    locked_until?: string | null;
+  };
+  financial_context: {
+    risk_tolerance: string;
+    horizon_years?: number | null;
+    max_drawdown_pct?: number | null;
+    constraints: string[];
+    custom_universe: string[];
+  };
+  activity: {
+    last_login_at?: string | null;
+    last_dashboard_at?: string | null;
+  };
+  rate_limit: {
+    currently_limited?: boolean;
+    buckets?: Record<string, unknown>;
+  };
+  error_logs: AdminUserErrorItem[];
+}

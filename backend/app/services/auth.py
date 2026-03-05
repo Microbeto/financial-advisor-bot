@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict
 
 from fastapi import HTTPException, status
@@ -64,6 +64,10 @@ def create_user(email: str, password: str, role: Role = "user") -> UserPublic:
         "email": email.lower().strip(),
         "password_hash": pbkdf2_hash_password(password),
         "role": role,
+        "account_status": "active",
+        "failed_login_attempts": 0,
+        "locked_until": None,
+        "last_login_at": None,
         "created_at": now,
     }
     try:
@@ -76,14 +80,46 @@ def create_user(email: str, password: str, role: Role = "user") -> UserPublic:
 def login_user(email: str, password: str) -> AuthResponse:
     users = db.require_col(db.users_col, "users")
     login_id = email.lower().strip()
+    now = datetime.now(timezone.utc)
     if "@" not in login_id and login_id != DEFAULT_ADMIN_LOGIN:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     doc = users.find_one({"email": login_id})
     if not doc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    account_status = str(doc.get("account_status", "active") or "active").lower()
+    if account_status == "suspended":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account suspended")
+
+    locked_until = doc.get("locked_until")
+    if isinstance(locked_until, datetime):
+        lu = locked_until.astimezone(timezone.utc)
+        if lu > now:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account temporarily locked")
+
     if not pbkdf2_verify_password(password, doc.get("password_hash", "")):
+        failed = int(doc.get("failed_login_attempts", 0) or 0) + 1
+        updates: dict[str, object] = {
+            "failed_login_attempts": failed,
+            "last_failed_login_at": now,
+        }
+        if failed >= 5:
+            updates["locked_until"] = now + timedelta(minutes=15)
+        users.update_one({"_id": doc["_id"]}, {"$set": updates})
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    users.update_one(
+        {"_id": doc["_id"]},
+        {
+            "$set": {
+                "failed_login_attempts": 0,
+                "locked_until": None,
+                "last_login_at": now,
+                "account_status": "active",
+            }
+        },
+    )
 
     payload = {"uid": str(doc["_id"]), "role": doc.get("role", "user"), "email": doc.get("email", "")}
     token = sign_token(payload)

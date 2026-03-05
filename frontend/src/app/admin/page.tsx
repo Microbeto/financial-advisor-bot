@@ -6,11 +6,16 @@ import { useAuth } from "@/lib/auth-context";
 import {
   adminClearCache,
   adminDeleteUser,
+  adminExportUser,
   adminGetCacheStats,
+  adminGetUserDetail,
   adminListUsers,
+  adminPurgeUser,
   adminPruneCache,
   adminRefreshNews,
+  adminResetUserState,
   adminRunDaily,
+  adminSetUserStatus,
   adminUpdatePolicyConstraints,
   adminUpdateRateLimit,
   adminUpdateUserRole,
@@ -18,7 +23,13 @@ import {
   getMlRuntimeSettings,
   updateMlRuntimeSettings,
 } from "@/lib/api-client";
-import type { MLRuntimeSettings, SignalTopItem, UserPublic } from "@/lib/types";
+import type {
+  AccountStatus,
+  AdminUserDetail,
+  MLRuntimeSettings,
+  SignalTopItem,
+  UserPublic,
+} from "@/lib/types";
 
 type Candidate = {
   symbol: string;
@@ -41,6 +52,11 @@ export default function AdminPage() {
 
   const [users, setUsers] = useState<UserPublic[]>([]);
   const [userLoading, setUserLoading] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [userDetail, setUserDetail] = useState<AdminUserDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [statusDraft, setStatusDraft] = useState<AccountStatus>("active");
+  const [lockMinutes, setLockMinutes] = useState(30);
 
   const [mlSettings, setMlSettings] = useState<MLRuntimeSettings | null>(null);
   const [mlDraft, setMlDraft] = useState<MLRuntimeSettings | null>(null);
@@ -123,6 +139,36 @@ export default function AdminPage() {
     };
   }, [isSignedIn, role]);
 
+  useEffect(() => {
+    if (!selectedUserId) {
+      setUserDetail(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadDetail() {
+      try {
+        setDetailLoading(true);
+        const detail = await adminGetUserDetail(selectedUserId);
+        if (cancelled) return;
+        setUserDetail(detail);
+        setStatusDraft(detail.security.status);
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) setError("Failed to load selected user details.");
+      } finally {
+        if (!cancelled) setDetailLoading(false);
+      }
+    }
+
+    loadDetail();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedUserId]);
+
   function toggleInBasket(symbol: string) {
     setBasket((prev) => {
       const next = new Set(prev);
@@ -197,6 +243,90 @@ export default function AdminPage() {
     } catch (err) {
       console.error(err);
       setError("Failed to delete user.");
+    } finally {
+      setUserLoading(false);
+    }
+  }
+
+  async function refreshUserDetail(userId: string) {
+    const detail = await adminGetUserDetail(userId);
+    setUserDetail(detail);
+    setStatusDraft(detail.security.status);
+  }
+
+  async function applyUserStatus() {
+    if (!selectedUserId) return;
+    try {
+      setUserLoading(true);
+      await adminSetUserStatus(selectedUserId, statusDraft, lockMinutes);
+      await refreshUserDetail(selectedUserId);
+      setMessage("User account status updated.");
+    } catch (err) {
+      console.error(err);
+      setError("Failed to update user account status.");
+    } finally {
+      setUserLoading(false);
+    }
+  }
+
+  async function resetUserState() {
+    if (!selectedUserId) return;
+    try {
+      setUserLoading(true);
+      const out = await adminResetUserState(selectedUserId);
+      await refreshUserDetail(selectedUserId);
+      setMessage(
+        `User state reset (signals=${out.cleared_daily_signals}, cache=${out.cleared_dashboard_cache}).`
+      );
+    } catch (err) {
+      console.error(err);
+      setError("Failed to reset user state.");
+    } finally {
+      setUserLoading(false);
+    }
+  }
+
+  async function exportUserData() {
+    if (!selectedUserId) return;
+    try {
+      setUserLoading(true);
+      const payload = await adminExportUser(selectedUserId);
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: "application/json;charset=utf-8",
+      });
+      const href = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.download = `user-export-${selectedUserId}.json`;
+      anchor.click();
+      URL.revokeObjectURL(href);
+      setMessage("User export downloaded.");
+    } catch (err) {
+      console.error(err);
+      setError("Failed to export user data.");
+    } finally {
+      setUserLoading(false);
+    }
+  }
+
+  async function purgeUserData() {
+    if (!selectedUserId) return;
+    const ok = window.confirm(
+      "Permanently purge this user and related records? This cannot be undone."
+    );
+    if (!ok) return;
+
+    try {
+      setUserLoading(true);
+      await adminPurgeUser(selectedUserId);
+      const data = await adminListUsers();
+      setUsers(data.items || []);
+      setSelectedUserId(null);
+      setUserDetail(null);
+      setMessage("User and related records purged.");
+    } catch (err) {
+      console.error(err);
+      setError("Failed to purge user records.");
     } finally {
       setUserLoading(false);
     }
@@ -407,7 +537,13 @@ export default function AdminPage() {
               </thead>
               <tbody>
                 {users.map((u) => (
-                  <tr key={u.user_id} className="border-b border-slate-800/80 hover:bg-slate-900">
+                  <tr
+                    key={u.user_id}
+                    className={[
+                      "border-b border-slate-800/80 hover:bg-slate-900",
+                      selectedUserId === u.user_id ? "bg-sky-950/20" : "",
+                    ].join(" ")}
+                  >
                     <td className="px-2 py-1 font-mono text-slate-100">{u.user_id}</td>
                     <td className="px-2 py-1 text-slate-300">{u.email}</td>
                     <td className="px-2 py-1">
@@ -426,6 +562,13 @@ export default function AdminPage() {
                     <td className="px-2 py-1">
                       <button
                         type="button"
+                        onClick={() => setSelectedUserId(u.user_id)}
+                        className="mr-2 rounded border border-sky-700 bg-sky-900/30 px-2 py-1 text-[11px] text-sky-200 hover:bg-sky-900/50"
+                      >
+                        View
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => removeUser(u.user_id)}
                         className="rounded border border-rose-700 bg-rose-900/40 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/60"
                       >
@@ -438,6 +581,139 @@ export default function AdminPage() {
             </table>
           </div>
         )}
+
+        <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-[11px] text-slate-300">Selected User Account</div>
+            <div className="text-[11px] text-slate-400">
+              {selectedUserId ? `User: ${selectedUserId}` : "No user selected"}
+            </div>
+          </div>
+
+          {detailLoading ? (
+            <p className="text-[11px] text-slate-300">Loading user detail…</p>
+          ) : !userDetail ? (
+            <p className="text-[11px] text-slate-400">Choose a user from the table to inspect account detail.</p>
+          ) : (
+            <div className="space-y-3">
+              <div className="grid gap-2 md:grid-cols-2">
+                <div className="rounded border border-slate-800 bg-slate-950/60 p-2 text-[11px] text-slate-300">
+                  <div className="mb-1 text-slate-200">Identity & Security</div>
+                  <div>Email: {userDetail.email}</div>
+                  <div>Role: {String(userDetail.role || "user")}</div>
+                  <div>Status: {userDetail.security.status}</div>
+                  <div>Failed logins: {userDetail.security.failed_login_attempts}</div>
+                  <div>Locked until: {userDetail.security.locked_until || "-"}</div>
+                </div>
+                <div className="rounded border border-slate-800 bg-slate-950/60 p-2 text-[11px] text-slate-300">
+                  <div className="mb-1 text-slate-200">Risk & Constraints</div>
+                  <div>Risk tolerance: {userDetail.financial_context.risk_tolerance}</div>
+                  <div>Horizon years: {String(userDetail.financial_context.horizon_years ?? "-")}</div>
+                  <div>Max drawdown: {String(userDetail.financial_context.max_drawdown_pct ?? "-")}</div>
+                  <div>
+                    Constraints: {userDetail.financial_context.constraints.length ? userDetail.financial_context.constraints.join(", ") : "-"}
+                  </div>
+                  <div>
+                    Universe: {userDetail.financial_context.custom_universe.length ? userDetail.financial_context.custom_universe.join(", ") : "-"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-2">
+                <div className="rounded border border-slate-800 bg-slate-950/60 p-2 text-[11px] text-slate-300">
+                  <div className="mb-1 text-slate-200">Usage Activity</div>
+                  <div>Created at: {userDetail.created_at || "-"}</div>
+                  <div>Last login: {userDetail.activity.last_login_at || "-"}</div>
+                  <div>Last dashboard: {userDetail.activity.last_dashboard_at || "-"}</div>
+                </div>
+                <div className="rounded border border-slate-800 bg-slate-950/60 p-2 text-[11px] text-slate-300">
+                  <div className="mb-1 text-slate-200">Rate Limit</div>
+                  <div>Currently limited: {String(Boolean(userDetail.rate_limit.currently_limited))}</div>
+                  <pre className="mt-1 max-h-28 overflow-auto rounded border border-slate-800 bg-slate-950 p-2 text-[10px] text-slate-300">
+                    {JSON.stringify(userDetail.rate_limit.buckets || {}, null, 2)}
+                  </pre>
+                </div>
+              </div>
+
+              <div className="rounded border border-slate-800 bg-slate-950/60 p-2 text-[11px] text-slate-300">
+                <div className="mb-1 text-slate-200">Recent Errors</div>
+                {userDetail.error_logs.length === 0 ? (
+                  <div className="text-slate-400">No recent user-linked errors.</div>
+                ) : (
+                  <div className="max-h-40 overflow-auto space-y-1">
+                    {userDetail.error_logs.map((item, idx) => (
+                      <div key={`${item.timestamp || "ts"}-${idx}`} className="rounded border border-slate-800 bg-slate-950 px-2 py-1">
+                        <div className="text-slate-200">{item.timestamp || "-"}</div>
+                        <div>{item.method} {item.path}</div>
+                        <div className="text-slate-400">{item.message}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded border border-slate-800 bg-slate-950/60 p-2 text-[11px]">
+                <div className="mb-2 text-slate-200">Admin Actions</div>
+                <div className="grid gap-2 md:grid-cols-4">
+                  <select
+                    value={statusDraft}
+                    onChange={(e) => setStatusDraft(e.target.value as AccountStatus)}
+                    className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-100"
+                    title="User status"
+                  >
+                    <option value="active">active</option>
+                    <option value="suspended">suspended</option>
+                    <option value="locked">locked</option>
+                  </select>
+                  <input
+                    type="number"
+                    min={1}
+                    value={lockMinutes}
+                    onChange={(e) => setLockMinutes(Number(e.target.value) || 1)}
+                    className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-100"
+                    placeholder="Lock minutes"
+                    title="Lock minutes"
+                  />
+                  <button
+                    type="button"
+                    onClick={applyUserStatus}
+                    disabled={userLoading}
+                    className="rounded border border-sky-700 bg-sky-900/30 px-2 py-1 text-[11px] text-sky-200 hover:bg-sky-900/50 disabled:opacity-60"
+                  >
+                    Set status
+                  </button>
+                  <button
+                    type="button"
+                    onClick={resetUserState}
+                    disabled={userLoading}
+                    className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-800 disabled:opacity-60"
+                  >
+                    Reset state
+                  </button>
+                </div>
+
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={exportUserData}
+                    disabled={userLoading}
+                    className="rounded border border-emerald-700 bg-emerald-900/30 px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-900/50 disabled:opacity-60"
+                  >
+                    Export user data
+                  </button>
+                  <button
+                    type="button"
+                    onClick={purgeUserData}
+                    disabled={userLoading}
+                    className="rounded border border-rose-700 bg-rose-900/40 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/60 disabled:opacity-60"
+                  >
+                    Purge user records
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 text-xs">

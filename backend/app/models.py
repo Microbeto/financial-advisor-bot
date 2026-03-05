@@ -40,6 +40,68 @@ class RoleUpdateRequest(BaseModel):
     role: Role
 
 
+AccountStatus = Literal["active", "suspended", "locked"]
+
+
+class AdminUserStatusUpdateRequest(BaseModel):
+    status: AccountStatus
+    lock_minutes: int = 30
+
+
+class AdminUserErrorItem(BaseModel):
+    timestamp: Optional[datetime] = None
+    path: str = ""
+    method: str = ""
+    message: str = ""
+
+
+class AdminUserActivity(BaseModel):
+    last_login_at: Optional[datetime] = None
+    last_dashboard_at: Optional[datetime] = None
+
+
+class AdminUserSecurity(BaseModel):
+    status: AccountStatus = "active"
+    failed_login_attempts: int = 0
+    locked_until: Optional[datetime] = None
+
+
+class AdminUserFinancialContext(BaseModel):
+    risk_tolerance: str = "balanced"
+    horizon_years: Optional[int] = None
+    max_drawdown_pct: Optional[float] = None
+    constraints: List[str] = Field(default_factory=list)
+    custom_universe: List[str] = Field(default_factory=list)
+
+
+class AdminUserDetailResponse(BaseModel):
+    user_id: str
+    email: str
+    role: Role
+    created_at: datetime
+    security: AdminUserSecurity = Field(default_factory=AdminUserSecurity)
+    financial_context: AdminUserFinancialContext = Field(default_factory=AdminUserFinancialContext)
+    activity: AdminUserActivity = Field(default_factory=AdminUserActivity)
+    rate_limit: Dict[str, Any] = Field(default_factory=dict)
+    error_logs: List[AdminUserErrorItem] = Field(default_factory=list)
+
+
+class AdminUserStateResetResponse(BaseModel):
+    ok: bool = True
+    cleared_daily_signals: int = 0
+    cleared_dashboard_cache: int = 0
+
+
+class AdminUserExportResponse(BaseModel):
+    user: Dict[str, Any] = Field(default_factory=dict)
+    risk_profile: Dict[str, Any] = Field(default_factory=dict)
+    portfolio: Dict[str, Any] = Field(default_factory=dict)
+    custom_universe: List[str] = Field(default_factory=list)
+    daily_signals: List[Dict[str, Any]] = Field(default_factory=list)
+    dashboard_cache: List[Dict[str, Any]] = Field(default_factory=list)
+    error_logs: List[Dict[str, Any]] = Field(default_factory=list)
+
+
 class UserListResponse(BaseModel):
     items: List[UserPublic] = Field(default_factory=list)
 

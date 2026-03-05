@@ -17,6 +17,8 @@ import type {
   MLRuntimeSettings,
   MLRuntimeSettingsUpdate,
   MLTournamentStatsResponse,
+  AdminUserDetail,
+  AccountStatus,
 } from "./types";
 import { API_BASE_URL } from "./config";
 
@@ -532,6 +534,48 @@ export async function adminUpdatePolicyConstraints(add: string[], remove: string
   return request<{ constraints: string[] }>("/manager/policy/constraints", {
     method: "PUT",
     body: { add, remove },
+    retry: { attempts: 1 },
+  });
+}
+
+export async function adminGetUserDetail(userId: string) {
+  const enc = encodeURIComponent(userId);
+  return request<AdminUserDetail>(`/admin/users/${enc}/detail`, {
+    retry: { attempts: 1 },
+  });
+}
+
+export async function adminSetUserStatus(userId: string, status: AccountStatus, lockMinutes = 30) {
+  const enc = encodeURIComponent(userId);
+  return request<{ ok: boolean; user_id: string; status: AccountStatus }>(`/admin/users/${enc}/status`, {
+    method: "PUT",
+    body: { status, lock_minutes: lockMinutes },
+    retry: { attempts: 1 },
+  });
+}
+
+export async function adminResetUserState(userId: string) {
+  const enc = encodeURIComponent(userId);
+  return request<{ ok: boolean; cleared_daily_signals: number; cleared_dashboard_cache: number }>(
+    `/admin/users/${enc}/reset-state`,
+    {
+      method: "POST",
+      retry: { attempts: 1 },
+    }
+  );
+}
+
+export async function adminExportUser(userId: string) {
+  const enc = encodeURIComponent(userId);
+  return request<Record<string, unknown>>(`/admin/users/${enc}/export`, {
+    retry: { attempts: 1 },
+  });
+}
+
+export async function adminPurgeUser(userId: string) {
+  const enc = encodeURIComponent(userId);
+  return request<{ ok: boolean; deleted: Record<string, number> }>(`/admin/users/${enc}/purge`, {
+    method: "DELETE",
     retry: { attempts: 1 },
   });
 }
