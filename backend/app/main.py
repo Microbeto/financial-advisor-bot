@@ -258,6 +258,21 @@ def create_app() -> FastAPI:
 
         return PortfolioSnapshot(cash=0.0, holdings=holdings)
 
+    def _is_legacy_admin_seed(snapshot: PortfolioSnapshot) -> bool:
+        hs = list(snapshot.holdings or [])
+        if not hs:
+            return False
+        if len(hs) < 5:
+            return False
+        for h in hs:
+            q = float(getattr(h, "quantity", 0.0) or 0.0)
+            p = float(getattr(h, "avg_price", 0.0) or 0.0)
+            if abs(q - 1.0) > 1e-9:
+                return False
+            if abs(p - 100.0) > 1e-9:
+                return False
+        return True
+
     def _build_ml_audit_entries() -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
 
@@ -425,7 +440,19 @@ def create_app() -> FastAPI:
         if doc:
             doc.pop("_id", None)
             doc.pop("user_id", None)
-            return PortfolioSnapshot(**doc)
+            existing = PortfolioSnapshot(**doc)
+
+            if role == "admin" and _is_legacy_admin_seed(existing):
+                regenerated = await _admin_default_portfolio()
+                payload = regenerated.model_dump()
+                col.update_one(
+                    {"user_id": uid},
+                    {"$set": {"user_id": uid, **payload, "updated_at": db.utc_now()}},
+                    upsert=True,
+                )
+                return regenerated
+
+            return existing
 
         if role == "admin":
             generated = await _admin_default_portfolio()

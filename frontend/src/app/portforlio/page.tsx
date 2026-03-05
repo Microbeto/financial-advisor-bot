@@ -58,6 +58,7 @@ function buyPriceFromHistory(raw: unknown, buyDate: string): number {
 export default function PortfolioPage() {
   const { role } = useAuth();
   const [portfolio, setPortfolio] = useState<PortfolioSnapshot | null>(null);
+  const [latestPrices, setLatestPrices] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [autofilling, setAutofilling] = useState(false);
@@ -166,6 +167,124 @@ export default function PortfolioPage() {
     };
   }, [role, portfolio]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function normalizeLegacyAdminPortfolio() {
+      if (role !== "admin" || !portfolio) return;
+      const hs = portfolio.holdings ?? [];
+      if (!hs.length) return;
+
+      const isLegacySeed = hs.every((h) => {
+        const q = Number(h.quantity || 0);
+        const p = Number(h.avg_price || 0);
+        return Number.isFinite(q) && Number.isFinite(p) && q === 1 && p === 100;
+      });
+
+      if (!isLegacySeed) return;
+
+      const buyDate = "2025-03-13";
+
+      try {
+        setAutofilling(true);
+        const priceEntries = await Promise.all(
+          hs.map(async (h) => {
+            const sym = String(h.symbol || "").trim().toUpperCase();
+            if (!sym) return [sym, 100] as const;
+            try {
+              const hist = await getMarketHistory(sym, 520);
+              const px = buyPriceFromHistory(hist, buyDate);
+              return [sym, px > 0 ? px : 100] as const;
+            } catch {
+              return [sym, 100] as const;
+            }
+          })
+        );
+
+        const bySymbol = new Map<string, number>(priceEntries);
+        const normalized: PortfolioSnapshot = {
+          ...portfolio,
+          holdings: hs.map((h) => {
+            const sym = String(h.symbol || "").trim().toUpperCase();
+            return {
+              ...h,
+              symbol: sym,
+              quantity: 100,
+              avg_price: bySymbol.get(sym) ?? 100,
+            };
+          }),
+        };
+
+        const saved = await savePortfolio(normalized);
+        if (!cancelled) {
+          setPortfolio(saved);
+          setMessage("Admin portfolio normalized: quantity 100 and per-stock buy-date average price applied.");
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        if (!cancelled) setAutofilling(false);
+      }
+    }
+
+    normalizeLegacyAdminPortfolio();
+    return () => {
+      cancelled = true;
+    };
+  }, [role, portfolio]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadLatestPrices() {
+      const symbols = Array.from(
+        new Set(
+          (portfolio?.holdings ?? [])
+            .map((h) => String(h.symbol || "").trim().toUpperCase())
+            .filter((s) => s.length > 0)
+        )
+      );
+
+      if (!symbols.length) {
+        if (!cancelled) setLatestPrices({});
+        return;
+      }
+
+      const entries = await Promise.all(
+        symbols.map(async (sym) => {
+          try {
+            const hist = await getMarketHistory(sym, 10);
+            const points = Array.isArray((hist as any)?.points) ? ((hist as any).points as Array<{ c?: number }>) : [];
+            let px = 0;
+            for (let i = points.length - 1; i >= 0; i--) {
+              const c = Number(points[i]?.c || 0);
+              if (Number.isFinite(c) && c > 0) {
+                px = c;
+                break;
+              }
+            }
+            return [sym, px] as const;
+          } catch {
+            return [sym, 0] as const;
+          }
+        })
+      );
+
+      if (!cancelled) {
+        const out: Record<string, number> = {};
+        for (const [sym, px] of entries) {
+          if (px > 0) out[sym] = px;
+        }
+        setLatestPrices(out);
+      }
+    }
+
+    loadLatestPrices();
+    return () => {
+      cancelled = true;
+    };
+  }, [portfolio?.holdings]);
+
   function updateHolding(index: number, field: keyof Holding, value: string) {
     if (!portfolio) return;
 
@@ -228,10 +347,14 @@ export default function PortfolioPage() {
     }
   }
 
-  const totalInvested = (portfolio?.holdings ?? []).reduce(
-    (acc, h) => acc + (Number(h.quantity) || 0) * (Number(h.avg_price) || 0),
-    0,
-  );
+  const totalInvested = (portfolio?.holdings ?? []).reduce((acc, h) => {
+    const qty = Number(h.quantity) || 0;
+    const avg = Number(h.avg_price) || 0;
+    const sym = String(h.symbol || "").trim().toUpperCase();
+    const live = Number(latestPrices[sym] || 0);
+    const px = live > 0 ? live : avg;
+    return acc + qty * px;
+  }, 0);
   const cash = Number(portfolio?.cash ?? 0);
   const totalValue = totalInvested + cash;
   const canViewAdvanced = role === "premium" || role === "admin" || role === "manager";
@@ -347,7 +470,12 @@ export default function PortfolioPage() {
 
                     <tbody>
                       {portfolio.holdings.map((h, idx) => {
-                        const value = (Number(h.quantity) || 0) * (Number(h.avg_price) || 0);
+                        const qty = Number(h.quantity) || 0;
+                        const avg = Number(h.avg_price) || 0;
+                        const sym = String(h.symbol || "").trim().toUpperCase();
+                        const live = Number(latestPrices[sym] || 0);
+                        const priceForValue = live > 0 ? live : avg;
+                        const value = qty * priceForValue;
                         const allocationPct = totalValue > 0 ? (value / totalValue) * 100 : 0;
                         return (
                         <tr key={idx} className="border-b border-slate-900 hover:bg-slate-950/60">
