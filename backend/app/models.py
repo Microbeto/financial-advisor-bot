@@ -254,6 +254,23 @@ class MLPruneResponse(BaseModel):
     deleted_model_ids: List[str] = Field(default_factory=list)
 
 
+class MLTournamentCompetitorStat(BaseModel):
+    sharpe: float = 0.0
+    max_drawdown: float = 0.0
+    mean_return: float = 0.0
+    volatility: float = 0.0
+    sample_count: float = 0.0
+
+
+class MLTournamentStatsResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    model_id: Optional[str] = None
+    algorithm: Optional[str] = None
+    winner_name: Optional[str] = None
+    competitor_stats: Dict[str, MLTournamentCompetitorStat] = Field(default_factory=dict)
+
+
 class MLPredictionRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 

@@ -29,6 +29,7 @@ from .models import (
     MLRuntimeSettingsUpdateRequest,
     MLSelectionRequest,
     MLSelectionResponse,
+    MLTournamentStatsResponse,
     MLTrainResponse,
     MLTrainingRequest,
     PolicyConstraintRequest,
@@ -66,6 +67,7 @@ from .services.ml_workflow import (
     predict_for_basket,
     prune_underperforming_models,
     get_ml_runtime_settings,
+    get_tournament_competitor_stats,
     select_best_models,
     train_models_async,
     update_ml_runtime_settings,
@@ -560,6 +562,14 @@ def create_app() -> FastAPI:
         claims = _claims_required(authorization)
         require_roles(claims, ("premium", "admin", "manager"))
         return MLModelListResponse(items=list_models())
+
+    @app.get("/ml/models/tournament-stats", response_model=MLTournamentStatsResponse)
+    async def ml_models_tournament_stats(model_id: str | None = None, authorization: str | None = Header(default=None)):
+        await _acquire_limit("api_ml_admin")
+        claims = _claims_required(authorization)
+        require_roles(claims, ("premium", "admin", "manager"))
+        out = get_tournament_competitor_stats(model_id=model_id)
+        return MLTournamentStatsResponse(**out)
 
     @app.post("/ml/models/select", response_model=MLSelectionResponse)
     async def ml_select(req: MLSelectionRequest, authorization: str | None = Header(default=None)):

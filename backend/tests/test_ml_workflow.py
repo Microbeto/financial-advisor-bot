@@ -7,7 +7,14 @@ import numpy as np
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from app.services.ml_workflow import _rank_models, _select_prune_candidates, _sentiment_score_text, _technical_features, _weighted_score
+from app.services.ml_workflow import (
+    _rank_models,
+    _select_prune_candidates,
+    _sentiment_score_text,
+    _technical_features,
+    _weighted_score,
+    get_tournament_competitor_stats,
+)
 
 
 def test_sentiment_scoring_positive_negative():
@@ -75,3 +82,44 @@ def test_prune_candidates_non_selected_at_capacity():
     out = _select_prune_candidates(docs, max_models=10)
     assert len(out) == 9
     assert all(not x["is_selected"] for x in out)
+
+
+def test_tournament_stats_returns_empty_for_non_tournament(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.ml_workflow._selected_or_latest_model",
+        lambda model_id=None: {"model_id": "rf_1", "algorithm": "random_forest"},
+    )
+
+    out = get_tournament_competitor_stats()
+    assert out["model_id"] == "rf_1"
+    assert out["algorithm"] == "random_forest"
+    assert out["winner_name"] is None
+    assert out["competitor_stats"] == {}
+
+
+def test_tournament_stats_extracts_stats_from_bundle(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.ml_workflow._selected_or_latest_model",
+        lambda model_id=None: {"model_id": "mat_1", "algorithm": "multi_armed_tournament"},
+    )
+    monkeypatch.setattr(
+        "app.services.ml_workflow._load_model",
+        lambda doc: {
+            "winner_name": "rl_agent",
+            "competitor_stats": {
+                "rl_agent": {
+                    "sharpe": 1.2,
+                    "max_drawdown": -0.15,
+                    "mean_return": 0.01,
+                    "volatility": 0.08,
+                    "sample_count": 64,
+                }
+            },
+        },
+    )
+
+    out = get_tournament_competitor_stats(model_id="mat_1")
+    assert out["model_id"] == "mat_1"
+    assert out["algorithm"] == "multi_armed_tournament"
+    assert out["winner_name"] == "rl_agent"
+    assert out["competitor_stats"]["rl_agent"]["sharpe"] == 1.2

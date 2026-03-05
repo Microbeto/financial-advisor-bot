@@ -645,6 +645,66 @@ def list_models() -> List[MLModelInfo]:
     return out
 
 
+def get_tournament_competitor_stats(model_id: Optional[str] = None) -> Dict[str, Any]:
+    doc = _selected_or_latest_model(model_id)
+    if not doc:
+        return {
+            "model_id": model_id,
+            "algorithm": None,
+            "winner_name": None,
+            "competitor_stats": {},
+        }
+
+    resolved_model_id = str(doc.get("model_id") or (model_id or "")) or None
+    algorithm = str(doc.get("algorithm") or "") or None
+    if algorithm != "multi_armed_tournament":
+        return {
+            "model_id": resolved_model_id,
+            "algorithm": algorithm,
+            "winner_name": None,
+            "competitor_stats": {},
+        }
+
+    try:
+        model_obj = _load_model(doc)
+    except Exception:
+        return {
+            "model_id": resolved_model_id,
+            "algorithm": algorithm,
+            "winner_name": None,
+            "competitor_stats": {},
+        }
+
+    if not isinstance(model_obj, dict):
+        return {
+            "model_id": resolved_model_id,
+            "algorithm": algorithm,
+            "winner_name": None,
+            "competitor_stats": {},
+        }
+
+    raw_stats = model_obj.get("competitor_stats") or {}
+    stats: Dict[str, Dict[str, float]] = {}
+    for name, payload in dict(raw_stats).items():
+        if not isinstance(payload, dict):
+            continue
+        stats[str(name)] = {
+            "sharpe": float(payload.get("sharpe", 0.0) or 0.0),
+            "max_drawdown": float(payload.get("max_drawdown", 0.0) or 0.0),
+            "mean_return": float(payload.get("mean_return", 0.0) or 0.0),
+            "volatility": float(payload.get("volatility", 0.0) or 0.0),
+            "sample_count": float(payload.get("sample_count", 0.0) or 0.0),
+        }
+
+    winner_name = str(model_obj.get("winner_name") or "") or None
+    return {
+        "model_id": resolved_model_id,
+        "algorithm": algorithm,
+        "winner_name": winner_name,
+        "competitor_stats": stats,
+    }
+
+
 def ensure_selected_model_exists() -> Optional[str]:
     col = _registry_col()
     selected = col.find_one({"is_selected": True}, sort=[("score", -1), ("created_at", -1)])
