@@ -158,8 +158,19 @@ class Annotation(BaseModel):
     why: str
 
 
+class AnnotatedPoint(BaseModel):
+    t: str
+    o: Optional[float] = None
+    h: Optional[float] = None
+    l: Optional[float] = None
+    c: float
+    v: Optional[float] = None
+
+
 class AnnotatedHistoryResponse(BaseModel):
     symbol: str
+    points: List[AnnotatedPoint] = Field(default_factory=list)
+    news_markers: List[Dict[str, Any]] = Field(default_factory=list)
     bars: List[MarketBar] = Field(default_factory=list)
     annotations: List[Annotation] = Field(default_factory=list)
 

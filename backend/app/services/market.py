@@ -127,7 +127,7 @@ def _read_disk_cache(symbol: str, interval: str, days: int) -> Optional[List[Dic
         if not isinstance(doc, dict) or not _is_disk_doc_fresh(doc, MARKET_CACHE_TTL_DAYS):
             return None
         pts = doc.get("points") or []
-        if isinstance(pts, list) and len(pts) >= 5:
+        if isinstance(pts, list) and len(pts) >= 1:
             _inc_cache_stat("disk_hits")
             return pts
         return None
@@ -173,10 +173,31 @@ def _parse_ohlc_csv_points(text: str, days: int) -> List[Dict[str, Any]]:
             if close_raw in (None, "", "null", "None", "N/A"):
                 close_raw = row.get("Close")
 
+            open_raw = row.get("Open")
+            high_raw = row.get("High")
+            low_raw = row.get("Low")
+            vol_raw = row.get("Volume")
+
             try:
                 close = float(close_raw)  # type: ignore[arg-type]
             except Exception:
                 continue
+            try:
+                opn = float(open_raw) if open_raw not in (None, "", "null", "None", "N/A") else float(close)
+            except Exception:
+                opn = float(close)
+            try:
+                high = float(high_raw) if high_raw not in (None, "", "null", "None", "N/A") else max(opn, float(close))
+            except Exception:
+                high = max(opn, float(close))
+            try:
+                low = float(low_raw) if low_raw not in (None, "", "null", "None", "N/A") else min(opn, float(close))
+            except Exception:
+                low = min(opn, float(close))
+            try:
+                vol = float(vol_raw) if vol_raw not in (None, "", "null", "None", "N/A") else 0.0
+            except Exception:
+                vol = 0.0
 
             try:
                 dt = datetime.fromisoformat(d_raw)
@@ -188,7 +209,16 @@ def _parse_ohlc_csv_points(text: str, days: int) -> List[Dict[str, Any]]:
                 except Exception:
                     continue
 
-            out.append({"t": _iso_date(dt), "c": float(close)})
+            out.append(
+                {
+                    "t": _iso_date(dt),
+                    "o": float(opn),
+                    "h": float(high),
+                    "l": float(low),
+                    "c": float(close),
+                    "v": float(max(0.0, vol)),
+                }
+            )
 
         out.sort(key=lambda x: x["t"])
         if days and len(out) > int(days):
@@ -204,9 +234,29 @@ def _to_points_from_df(df: Any) -> List[Dict[str, Any]]:
 
     cols = {c.lower(): c for c in df.columns}
     close_col = None
+    open_col = None
+    high_col = None
+    low_col = None
+    volume_col = None
     for cand in ["adj close", "adjclose", "close"]:
         if cand in cols:
             close_col = cols[cand]
+            break
+    for cand in ["open"]:
+        if cand in cols:
+            open_col = cols[cand]
+            break
+    for cand in ["high"]:
+        if cand in cols:
+            high_col = cols[cand]
+            break
+    for cand in ["low"]:
+        if cand in cols:
+            low_col = cols[cand]
+            break
+    for cand in ["volume", "vol"]:
+        if cand in cols:
+            volume_col = cols[cand]
             break
     if close_col is None:
         return []
@@ -228,7 +278,33 @@ def _to_points_from_df(df: Any) -> List[Dict[str, Any]]:
         except Exception:
             continue
 
-        out.append({"t": _iso_date(dt), "c": c})
+        try:
+            opn = float(df.iloc[i][open_col]) if open_col is not None else float(c)
+        except Exception:
+            opn = float(c)
+        try:
+            high = float(df.iloc[i][high_col]) if high_col is not None else max(opn, float(c))
+        except Exception:
+            high = max(opn, float(c))
+        try:
+            low = float(df.iloc[i][low_col]) if low_col is not None else min(opn, float(c))
+        except Exception:
+            low = min(opn, float(c))
+        try:
+            vol = float(df.iloc[i][volume_col]) if volume_col is not None else 0.0
+        except Exception:
+            vol = 0.0
+
+        out.append(
+            {
+                "t": _iso_date(dt),
+                "o": float(opn),
+                "h": float(high),
+                "l": float(low),
+                "c": float(c),
+                "v": float(max(0.0, vol)),
+            }
+        )
 
     out.sort(key=lambda x: x["t"])
     return out
@@ -335,7 +411,7 @@ def _read_cache(symbol: str, interval: str, days: int) -> Optional[List[Dict[str
         if not _cache_fresh(doc, MARKET_CACHE_TTL_DAYS):
             return None
         pts = doc.get("points") or []
-        if isinstance(pts, list) and len(pts) >= 5:
+        if isinstance(pts, list) and len(pts) >= 1:
             _inc_cache_stat("mongo_hits")
             _write_disk_cache(symbol, interval, days, pts, str(doc.get("source") or "mongo"))
             return pts
@@ -414,18 +490,35 @@ async def _history_from_yahoo_chart(symbol: str, days: int) -> List[Dict[str, An
         ts = res.get("timestamp") or []
         ind = (res.get("indicators") or {}).get("quote") or []
         quote0 = ind[0] if ind else {}
+        opens = quote0.get("open") or []
+        highs = quote0.get("high") or []
+        lows = quote0.get("low") or []
         closes = quote0.get("close") or []
+        vols = quote0.get("volume") or []
 
         if not ts or not closes:
             return []
 
         out: List[Dict[str, Any]] = []
-        for t, c in zip(ts, closes):
+        for idx, (t, c) in enumerate(zip(ts, closes)):
             if c is None:
                 continue
             try:
                 dt = datetime.fromtimestamp(int(t), tz=timezone.utc)
-                out.append({"t": _iso_date(dt), "c": float(c)})
+                opn = opens[idx] if idx < len(opens) and opens[idx] is not None else c
+                high = highs[idx] if idx < len(highs) and highs[idx] is not None else max(opn, c)
+                low = lows[idx] if idx < len(lows) and lows[idx] is not None else min(opn, c)
+                vol = vols[idx] if idx < len(vols) and vols[idx] is not None else 0.0
+                out.append(
+                    {
+                        "t": _iso_date(dt),
+                        "o": float(opn),
+                        "h": float(high),
+                        "l": float(low),
+                        "c": float(c),
+                        "v": float(max(0.0, float(vol))),
+                    }
+                )
             except Exception:
                 continue
 
@@ -612,7 +705,7 @@ async def get_price_history(symbol: str, days: int = 180) -> Dict[str, Any]:
         if getter is None:
             continue
         pts = await getter(sym, days)
-        if pts and len(pts) >= 5:
+        if pts and len(pts) >= 1:
             _write_cache(sym, interval, days, pts, src)
             return {"symbol": sym, "points": pts}
 
@@ -654,7 +747,7 @@ async def get_price_histories(
         yb = await _batch_history_from_yfinance(missing, days)
         for sym in list(missing):
             pts = yb.get(sym) or []
-            if pts and len(pts) >= 5:
+            if pts and len(pts) >= 1:
                 _write_cache(sym, interval, days, pts, "yfinance_batch")
                 results[sym] = {"symbol": sym, "points": pts}
                 missing.remove(sym)
@@ -682,7 +775,7 @@ async def get_price_histories(
                     if getter is None:
                         continue
                     pts = await getter(sym, days)
-                    if pts and len(pts) >= 5:
+                    if pts and len(pts) >= 1:
                         _write_cache(sym, interval, days, pts, src)
                         results[sym] = {"symbol": sym, "points": pts}
                         return

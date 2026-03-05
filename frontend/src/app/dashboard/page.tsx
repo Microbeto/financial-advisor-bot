@@ -6,7 +6,7 @@ import Link from "next/link";
 import { getDailySignals, getMarketHistory } from "@/lib/api-client";
 import type { DailySignals, SignalTopItem, NewsItem } from "@/lib/types";
 
-type HistoryPoint = { t: string; c: number };
+type HistoryPoint = { t: string; o?: number; h?: number; l?: number; c: number; v?: number };
 type History = { symbol: string; points: HistoryPoint[] };
 
 function clamp(n: number, lo: number, hi: number) {
@@ -25,34 +25,84 @@ function formatMaybeDate(s?: string | null) {
   return d.toLocaleString();
 }
 
-function Sparkline({ points }: { points: HistoryPoint[] }) {
-  const w = 640;
-  const h = 220;
-  const pad = 16;
+function CandlesChart({ points }: { points: HistoryPoint[] }) {
+  const w = 760;
+  const h = 360;
+  const padX = 18;
+  const topPad = 12;
+  const priceAreaH = 260;
+  const volumeAreaTop = topPad + priceAreaH + 12;
+  const volumeAreaH = h - volumeAreaTop - 18;
 
-  const ys = points.map((p) => p.c);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
+  const normalized = points.map((p, i) => {
+    const prev = i > 0 ? points[i - 1] : null;
+    const close = Number(p.c || 0);
+    const openRaw = Number(p.o ?? NaN);
+    const highRaw = Number(p.h ?? NaN);
+    const lowRaw = Number(p.l ?? NaN);
+    const open = Number.isFinite(openRaw) ? openRaw : Number(prev?.c ?? close);
+    const high = Number.isFinite(highRaw) ? highRaw : Math.max(open, close);
+    const low = Number.isFinite(lowRaw) ? lowRaw : Math.min(open, close);
+    const volume = Math.max(0, Number(p.v ?? 0));
+    return { t: p.t, o: open, h: high, l: low, c: close, v: volume };
+  });
+
+  const highs = normalized.map((p) => p.h);
+  const lows = normalized.map((p) => p.l);
+  const minY = Math.min(...lows);
+  const maxY = Math.max(...highs);
   const spanY = Math.max(1e-9, maxY - minY);
+  const maxV = Math.max(1, ...normalized.map((p) => p.v));
 
-  const toX = (i: number) => pad + (i / Math.max(1, points.length - 1)) * (w - pad * 2);
-  const toY = (v: number) => pad + (1 - (v - minY) / spanY) * (h - pad * 2);
+  const left = padX;
+  const right = w - padX;
+  const plotW = right - left;
+  const step = plotW / Math.max(1, normalized.length);
+  const bodyW = Math.max(2, Math.min(8, step * 0.65));
 
-  const d = points
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${toX(i).toFixed(2)} ${toY(p.c).toFixed(2)}`)
-    .join(" ");
+  const yPrice = (v: number) => topPad + (1 - (v - minY) / spanY) * priceAreaH;
+  const yVol = (v: number) => volumeAreaTop + volumeAreaH - (v / maxV) * volumeAreaH;
 
-  const first = points[0]?.t ?? "";
-  const last = points[points.length - 1]?.t ?? "";
+  const first = normalized[0]?.t ?? "";
+  const last = normalized[normalized.length - 1]?.t ?? "";
 
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="w-full">
-      <path d={d} fill="none" stroke="currentColor" strokeWidth="2" opacity="0.9" />
-      <text x={pad} y={h - 6} fontSize="11" opacity="0.7">
+      {normalized.map((p, i) => {
+        const x = left + i * step + step / 2;
+        const yo = yPrice(p.o);
+        const yc = yPrice(p.c);
+        const yh = yPrice(p.h);
+        const yl = yPrice(p.l);
+        const up = p.c >= p.o;
+        const color = up ? "#10b981" : "#f43f5e";
+        const bodyTop = Math.min(yo, yc);
+        const bodyH = Math.max(1.2, Math.abs(yc - yo));
+
+        return (
+          <g key={`${p.t}-${i}`}>
+            <line x1={x} y1={yh} x2={x} y2={yl} stroke={color} strokeWidth={1} opacity={0.9} />
+            <rect x={x - bodyW / 2} y={bodyTop} width={bodyW} height={bodyH} fill={color} opacity={0.85} rx={0.5} />
+            <rect
+              x={x - bodyW / 2}
+              y={yVol(p.v)}
+              width={Math.max(1.5, bodyW * 0.85)}
+              height={Math.max(1, volumeAreaTop + volumeAreaH - yVol(p.v))}
+              fill={color}
+              opacity={0.5}
+            />
+          </g>
+        );
+      })}
+
+      <text x={left} y={h - 4} fontSize="11" opacity="0.7" fill="currentColor">
         {first} → {last}
       </text>
-      <text x={w - pad} y={pad + 10} fontSize="11" opacity="0.7" textAnchor="end">
+      <text x={right} y={topPad + 10} fontSize="11" opacity="0.7" textAnchor="end" fill="currentColor">
         {minY.toFixed(2)} – {maxY.toFixed(2)}
+      </text>
+      <text x={left} y={volumeAreaTop - 2} fontSize="10" opacity="0.6" fill="currentColor">
+        Volume
       </text>
     </svg>
   );
@@ -343,7 +393,27 @@ export default function DashboardPage() {
     try {
       const h = (await getMarketHistory(symbol, 180)) as unknown;
       const parsed = h as any;
-      const points = Array.isArray(parsed?.points) ? (parsed.points as HistoryPoint[]) : [];
+      const pointsFromPayload = Array.isArray(parsed?.points) ? (parsed.points as HistoryPoint[]) : [];
+      const pointsFromBars = Array.isArray(parsed?.bars)
+        ? (parsed.bars as Array<{ t?: number | string; o?: number; h?: number; l?: number; c?: number; v?: number }>).map((b) => {
+            const rawT = b?.t;
+            let t = "";
+            if (typeof rawT === "number" && Number.isFinite(rawT)) {
+              t = new Date(rawT * 1000).toISOString().slice(0, 10);
+            } else {
+              t = String(rawT ?? "");
+            }
+            return {
+              t,
+              o: Number(b?.o ?? b?.c ?? 0),
+              h: Number(b?.h ?? b?.c ?? 0),
+              l: Number(b?.l ?? b?.c ?? 0),
+              c: Number(b?.c ?? 0),
+              v: Number(b?.v ?? 0),
+            };
+          })
+        : [];
+      const points = pointsFromPayload.length > 0 ? pointsFromPayload : pointsFromBars;
 
       // Keep modal open even if empty; show a clear message.
       setHistory({ symbol, points });
@@ -465,7 +535,7 @@ export default function DashboardPage() {
             <div className="text-sm text-slate-300">Loading…</div>
           ) : history?.points?.length ? (
             <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-slate-200">
-              <Sparkline points={history.points} />
+              <CandlesChart points={history.points} />
             </div>
           ) : (
             <div className="text-sm text-slate-300">

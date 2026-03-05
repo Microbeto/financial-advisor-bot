@@ -22,6 +22,11 @@ try:
 except Exception:
     pd = None
 
+try:
+    from pymongo.errors import DuplicateKeyError
+except Exception:
+    DuplicateKeyError = None
+
 
 DASH_MAX_SYMBOLS_PUBLIC = int(os.getenv("DASH_MAX_SYMBOLS_PUBLIC", "35"))
 DASH_MAX_SYMBOLS_PRIVATE = int(os.getenv("DASH_MAX_SYMBOLS_PRIVATE", "60"))
@@ -232,11 +237,26 @@ def _read_cached_signals(user_id: str, date: str) -> Dict[str, Any] | None:
 
 def _write_cached_signals(user_id: str, date: str, payload: Dict[str, Any]) -> None:
     col = db.require_col(db.daily_signals_col, "daily_signals")
-    col.update_one(
-        {"user_id": user_id, "date": date},
-        {"$set": {"user_id": user_id, "date": date, **payload}},
-        upsert=True,
-    )
+    _safe_cache_upsert(col, user_id=user_id, date=date, payload=payload)
+
+
+def _safe_cache_upsert(col: Any, user_id: str, date: str, payload: Dict[str, Any]) -> None:
+    doc = {"user_id": user_id, "date": date, **payload}
+    try:
+        col.update_one(
+            {"user_id": user_id, "date": date},
+            {"$set": doc},
+            upsert=True,
+        )
+        return
+    except Exception as exc:
+        if DuplicateKeyError is not None and isinstance(exc, DuplicateKeyError):
+            try:
+                col.update_one({"date": date}, {"$set": doc}, upsert=False)
+            except Exception:
+                return
+            return
+        return
 
 
 def _take_top_unique(items: List[TrendItem], want: int, used: set[str]) -> List[TrendItem]:
@@ -301,11 +321,7 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
 
         payload = resp.model_dump()
         payload["cached_at"] = _utc_iso_z(datetime.now(timezone.utc))
-        dash_col.update_one(
-            {"user_id": user_id, "date": today},
-            {"$set": {"user_id": user_id, "date": today, **payload}},
-            upsert=True,
-        )
+        _safe_cache_upsert(dash_col, user_id=user_id, date=today, payload=payload)
         return resp
 
     sp500 = get_universe_for_date(today, "sp500")
@@ -389,11 +405,7 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
 
     payload = resp.model_dump()
     payload["cached_at"] = _utc_iso_z(datetime.now(timezone.utc))
-    dash_col.update_one(
-        {"user_id": user_id, "date": today},
-        {"$set": {"user_id": user_id, "date": today, **payload}},
-        upsert=True,
-    )
+    _safe_cache_upsert(dash_col, user_id=user_id, date=today, payload=payload)
     return resp
 
 

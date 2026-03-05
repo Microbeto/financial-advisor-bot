@@ -453,3 +453,85 @@ export async function getMlTournamentStats(modelId?: string) {
     retry: { attempts: 1 },
   });
 }
+
+export async function adminListUsers() {
+  return request<{ items: UserPublic[] }>("/admin/users", {
+    retry: { attempts: 1 },
+  });
+}
+
+export async function adminUpdateUserRole(userId: string, role: string) {
+  const enc = encodeURIComponent(userId);
+  return request<UserPublic>(`/admin/users/${enc}/role`, {
+    method: "PUT",
+    body: { role },
+    retry: { attempts: 1 },
+  });
+}
+
+export async function adminDeleteUser(userId: string) {
+  const enc = encodeURIComponent(userId);
+  return request<{ ok: boolean }>(`/admin/users/${enc}`, {
+    method: "DELETE",
+    retry: { attempts: 1 },
+  });
+}
+
+export async function adminRunDaily() {
+  return request<{ ok: boolean }>("/admin/scheduler/run-daily", {
+    method: "POST",
+    retry: { attempts: 1 },
+  });
+}
+
+export async function adminRefreshNews() {
+  return request<{ ok: boolean; count: number }>("/admin/news/refresh", {
+    method: "POST",
+    retry: { attempts: 1 },
+  });
+}
+
+export async function adminGetCacheStats() {
+  return request<Record<string, unknown>>("/admin/cache/stats", {
+    retry: { attempts: 1 },
+  });
+}
+
+export async function adminPruneCache(payload?: { max_age_days?: number; dry_run?: boolean }) {
+  const p = new URLSearchParams();
+  if (typeof payload?.max_age_days === "number") p.set("max_age_days", String(payload.max_age_days));
+  if (typeof payload?.dry_run === "boolean") p.set("dry_run", String(payload.dry_run));
+  const qs = p.toString();
+  return request<Record<string, unknown>>(`/admin/cache/prune${qs ? `?${qs}` : ""}`, {
+    method: "POST",
+    retry: { attempts: 1 },
+  });
+}
+
+export async function adminClearCache(payload?: { scope?: string; max_age_days?: number; dry_run?: boolean }) {
+  const p = new URLSearchParams();
+  if (payload?.scope) p.set("scope", payload.scope);
+  if (typeof payload?.max_age_days === "number") p.set("max_age_days", String(payload.max_age_days));
+  if (typeof payload?.dry_run === "boolean") p.set("dry_run", String(payload.dry_run));
+  const qs = p.toString();
+  return request<Record<string, unknown>>(`/admin/cache/clear${qs ? `?${qs}` : ""}`, {
+    method: "POST",
+    retry: { attempts: 1 },
+  });
+}
+
+export async function adminUpdateRateLimit(key: string, perMinute: number) {
+  return request<{ ok: boolean; key: string; per_minute: number }>("/admin/rate-limit", {
+    method: "PUT",
+    body: { key, per_minute: perMinute },
+    retry: { attempts: 1 },
+  });
+}
+
+export async function adminUpdatePolicyConstraints(add: string[], remove: string[]) {
+  return request<{ constraints: string[] }>("/manager/policy/constraints", {
+    method: "PUT",
+    body: { add, remove },
+    retry: { attempts: 1 },
+  });
+}

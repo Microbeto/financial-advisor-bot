@@ -4,32 +4,29 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import {
+  adminClearCache,
+  adminDeleteUser,
+  adminGetCacheStats,
+  adminListUsers,
+  adminPruneCache,
+  adminRefreshNews,
+  adminRunDaily,
+  adminUpdatePolicyConstraints,
+  adminUpdateRateLimit,
+  adminUpdateUserRole,
+  getDailySignals,
   getMlRuntimeSettings,
   updateMlRuntimeSettings,
 } from "@/lib/api-client";
-import type { MLRuntimeSettings } from "@/lib/types";
+import type { MLRuntimeSettings, SignalTopItem, UserPublic } from "@/lib/types";
 
-type Holding = {
+type Candidate = {
   symbol: string;
-  quantity: number;
-  avg_price: number;
-};
-
-type PortfolioSnapshot = {
-  cash: number;
-  holdings: Holding[];
-};
-
-type Recommendation = {
-  symbol: string;
-  action: "BUY" | "SELL" | "HOLD";
+  action: "BUY" | "SELL";
   size: number;
   confidence: number;
   rationale: string;
 };
-
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 export default function AdminPage() {
   const { isSignedIn, role } = useAuth();
@@ -37,14 +34,29 @@ export default function AdminPage() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [candidates, setCandidates] = useState<Recommendation[]>([]);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [basket, setBasket] = useState<Set<string>>(new Set());
+
+  const [users, setUsers] = useState<UserPublic[]>([]);
+  const [userLoading, setUserLoading] = useState(false);
+
   const [mlSettings, setMlSettings] = useState<MLRuntimeSettings | null>(null);
   const [mlDraft, setMlDraft] = useState<MLRuntimeSettings | null>(null);
   const [mlLoading, setMlLoading] = useState(false);
   const [mlSaving, setMlSaving] = useState(false);
   const [mlMessage, setMlMessage] = useState<string | null>(null);
   const [mlError, setMlError] = useState<string | null>(null);
+
+  const [cacheStats, setCacheStats] = useState<Record<string, unknown> | null>(null);
+  const [opsLoading, setOpsLoading] = useState(false);
+  const [rateLimitKey, setRateLimitKey] = useState("api_read");
+  const [rateLimitValue, setRateLimitValue] = useState(120);
+
+  const [policyAdd, setPolicyAdd] = useState("");
+  const [policyRemove, setPolicyRemove] = useState("");
+  const [policyConstraints, setPolicyConstraints] = useState<string[]>([]);
 
   // Guard: only admins allowed
   useEffect(() => {
@@ -68,34 +80,37 @@ export default function AdminPage() {
         setLoading(true);
         setError(null);
 
-        const pfRes = await fetch(`${API_BASE}/portfolio`, {
-          method: "GET",
-          credentials: "include",
-        });
-        if (!pfRes.ok) throw new Error("Failed to load portfolio");
-        const portfolio: PortfolioSnapshot = await pfRes.json();
-
-        const recRes = await fetch(`${API_BASE}/recommendations`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(portfolio),
-        });
-        if (!recRes.ok) throw new Error("Failed to load recommendations");
-        const recs: Recommendation[] = await recRes.json();
+        const [signals, userRes, settings, cache] = await Promise.all([
+          getDailySignals(undefined, true),
+          adminListUsers(),
+          getMlRuntimeSettings(),
+          adminGetCacheStats(),
+        ]);
 
         if (cancelled) return;
 
-        // Candidates: all BUYs plus any HOLDs above some confidence threshold
-        const filtered = recs.filter(
-          (r) => r.action === "BUY" || (r.action === "HOLD" && r.confidence >= 0.7),
-        );
+        const toCandidate = (it: SignalTopItem, action: "BUY" | "SELL"): Candidate => ({
+          symbol: it.symbol,
+          action,
+          size: 1,
+          confidence: Math.max(0, Math.min(1, Math.abs(Number(it.score || 0)))),
+          rationale: String(it.reason || "Signal from ranking engine"),
+        });
 
-        setCandidates(filtered);
-        setBasket(new Set(filtered.filter((r) => r.action === "BUY").map((r) => r.symbol)));
+        const up = (signals.top_up || []).map((it) => toCandidate(it, "BUY"));
+        const down = (signals.top_down || []).map((it) => toCandidate(it, "SELL"));
+        const merged = [...up, ...down];
+        setCandidates(merged);
+        setBasket(new Set(up.map((x) => x.symbol)));
+
+        setUsers(userRes.items || []);
+        setMlSettings(settings);
+        setMlDraft(settings);
+        setCacheStats(cache);
       } catch (err) {
         console.error(err);
         if (!cancelled) {
-          setError("Failed to load admin basket view.");
+          setError("Failed to load admin control panel.");
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -103,35 +118,6 @@ export default function AdminPage() {
     }
 
     load();
-    return () => {
-      cancelled = true;
-    };
-  }, [isSignedIn, role]);
-
-  useEffect(() => {
-    if (!isSignedIn || role !== "admin") return;
-
-    let cancelled = false;
-
-    async function loadMlSettings() {
-      try {
-        setMlLoading(true);
-        setMlError(null);
-        const data = await getMlRuntimeSettings();
-        if (cancelled) return;
-        setMlSettings(data);
-        setMlDraft(data);
-      } catch (err) {
-        console.error(err);
-        if (!cancelled) {
-          setMlError("Failed to load ML runtime settings.");
-        }
-      } finally {
-        if (!cancelled) setMlLoading(false);
-      }
-    }
-
-    loadMlSettings();
     return () => {
       cancelled = true;
     };
@@ -177,6 +163,106 @@ export default function AdminPage() {
     }
   }
 
+  async function refreshCacheStats() {
+    try {
+      const data = await adminGetCacheStats();
+      setCacheStats(data);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function changeUserRole(userId: string, newRole: string) {
+    try {
+      setUserLoading(true);
+      await adminUpdateUserRole(userId, newRole);
+      const data = await adminListUsers();
+      setUsers(data.items || []);
+      setMessage("User role updated.");
+    } catch (err) {
+      console.error(err);
+      setError("Failed to update user role.");
+    } finally {
+      setUserLoading(false);
+    }
+  }
+
+  async function removeUser(userId: string) {
+    try {
+      setUserLoading(true);
+      await adminDeleteUser(userId);
+      const data = await adminListUsers();
+      setUsers(data.items || []);
+      setMessage("User deleted.");
+    } catch (err) {
+      console.error(err);
+      setError("Failed to delete user.");
+    } finally {
+      setUserLoading(false);
+    }
+  }
+
+  async function runOps(action: "daily" | "news" | "prune" | "clear") {
+    try {
+      setOpsLoading(true);
+      setMessage(null);
+      if (action === "daily") {
+        await adminRunDaily();
+        setMessage("Daily scheduler run completed.");
+      } else if (action === "news") {
+        const out = await adminRefreshNews();
+        setMessage(`News refreshed (${out.count} items).`);
+      } else if (action === "prune") {
+        await adminPruneCache({ dry_run: false });
+        setMessage("Cache prune finished.");
+      } else if (action === "clear") {
+        await adminClearCache({ scope: "all", dry_run: false });
+        setMessage("Cache clear finished.");
+      }
+      await refreshCacheStats();
+    } catch (err) {
+      console.error(err);
+      setError("Failed to run admin operation.");
+    } finally {
+      setOpsLoading(false);
+    }
+  }
+
+  async function saveRateLimit() {
+    try {
+      setOpsLoading(true);
+      await adminUpdateRateLimit(rateLimitKey, rateLimitValue);
+      setMessage(`Rate limit updated: ${rateLimitKey}=${rateLimitValue}/min`);
+    } catch (err) {
+      console.error(err);
+      setError("Failed to update rate limit.");
+    } finally {
+      setOpsLoading(false);
+    }
+  }
+
+  async function savePolicyConstraints() {
+    const add = policyAdd
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    const remove = policyRemove
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    try {
+      setOpsLoading(true);
+      const out = await adminUpdatePolicyConstraints(add, remove);
+      setPolicyConstraints(out.constraints || []);
+      setMessage("Policy constraints updated.");
+    } catch (err) {
+      console.error(err);
+      setError("Failed to update policy constraints.");
+    } finally {
+      setOpsLoading(false);
+    }
+  }
+
   function resetMlSettings() {
     if (!mlSettings) return;
     setMlDraft(mlSettings);
@@ -189,17 +275,21 @@ export default function AdminPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">Admin: Trading basket</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Admin Control Panel</h1>
         <p className="max-w-2xl text-sm text-slate-300">
-          This view shows the stocks the regime filter has surfaced. Select which
-          ones belong in the live trading basket. Later, this selection can be
-          pushed to your execution engine.
+          Central place to manage users, machine-learning runtime configuration,
+          policy constraints, and operational site/database actions.
         </p>
       </div>
 
       {error && (
         <div className="rounded-md border border-red-500/40 bg-red-950/40 px-3 py-2 text-xs text-red-200">
           {error}
+        </div>
+      )}
+      {message && (
+        <div className="rounded-md border border-emerald-500/40 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-200">
+          {message}
         </div>
       )}
 
@@ -283,16 +373,71 @@ export default function AdminPage() {
 
         <div className="mt-3 flex items-center justify-between text-[11px] text-slate-400">
           <p>
-            Current selection is kept locally in this prototype. In production,
-            send it to an API like <code>/admin/basket</code>.
+            Basket is currently client-side selection of live signal candidates.
           </p>
           <button
             type="button"
+              onClick={() => setMessage(`Basket prepared with ${selectedCount} symbols.`)}
             className="rounded-md border border-sky-600 bg-sky-600 px-3 py-1 text-[11px] font-medium text-slate-50 hover:bg-sky-500"
           >
-            Save basket (wire later)
+            Save basket
           </button>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 text-xs">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="text-[11px] text-slate-300">User Management</div>
+          <div className="text-[11px] text-slate-400">Users: {users.length}</div>
+        </div>
+        {userLoading ? (
+          <p className="text-[11px] text-slate-300">Updating users…</p>
+        ) : users.length === 0 ? (
+          <p className="text-[11px] text-slate-300">No users found.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full table-auto text-left text-[11px]">
+              <thead>
+                <tr className="border-b border-slate-700 bg-slate-900/80 text-slate-300">
+                  <th className="px-2 py-1">User ID</th>
+                  <th className="px-2 py-1">Email</th>
+                  <th className="px-2 py-1">Role</th>
+                  <th className="px-2 py-1">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((u) => (
+                  <tr key={u.user_id} className="border-b border-slate-800/80 hover:bg-slate-900">
+                    <td className="px-2 py-1 font-mono text-slate-100">{u.user_id}</td>
+                    <td className="px-2 py-1 text-slate-300">{u.email}</td>
+                    <td className="px-2 py-1">
+                      <select
+                        value={String(u.role || "user")}
+                        onChange={(e) => changeUserRole(u.user_id, e.target.value)}
+                        className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-100"
+                        title="Change role"
+                      >
+                        <option value="user">user</option>
+                        <option value="premium">premium</option>
+                        <option value="manager">manager</option>
+                        <option value="admin">admin</option>
+                      </select>
+                    </td>
+                    <td className="px-2 py-1">
+                      <button
+                        type="button"
+                        onClick={() => removeUser(u.user_id)}
+                        className="rounded border border-rose-700 bg-rose-900/40 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/60"
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 text-xs">
@@ -399,6 +544,92 @@ export default function AdminPage() {
           >
             {mlSaving ? "Saving…" : "Save ML settings"}
           </button>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 text-xs space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="text-[11px] text-slate-300">Policy Constraints</div>
+          <div className="text-[11px] text-slate-400">Global rule controls</div>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="space-y-1">
+            <span className="text-[11px] text-slate-300">Add constraints (comma-separated)</span>
+            <input
+              type="text"
+              value={policyAdd}
+              onChange={(e) => setPolicyAdd(e.target.value)}
+              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-100"
+              placeholder="no_penny_stocks,max_sector_30"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-[11px] text-slate-300">Remove constraints (comma-separated)</span>
+            <input
+              type="text"
+              value={policyRemove}
+              onChange={(e) => setPolicyRemove(e.target.value)}
+              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-100"
+              placeholder="old_constraint"
+            />
+          </label>
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="text-[11px] text-slate-400">
+            Active constraints: {policyConstraints.length ? policyConstraints.join(", ") : "(load/update to view)"}
+          </div>
+          <button
+            type="button"
+            onClick={savePolicyConstraints}
+            disabled={opsLoading}
+            className="rounded-md border border-sky-600 bg-sky-600 px-3 py-1 text-[11px] font-medium text-slate-50 hover:bg-sky-500 disabled:opacity-60"
+          >
+            Save policy constraints
+          </button>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 text-xs space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="text-[11px] text-slate-300">Site & Database Operations</div>
+          <div className="text-[11px] text-slate-400">Cache, scheduler, news, rate limits</div>
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <button type="button" onClick={() => runOps("daily")} disabled={opsLoading} className="rounded-md border border-slate-600 bg-slate-800 px-3 py-1 text-[11px] text-slate-100 hover:bg-slate-700 disabled:opacity-60">Run daily job</button>
+          <button type="button" onClick={() => runOps("news")} disabled={opsLoading} className="rounded-md border border-slate-600 bg-slate-800 px-3 py-1 text-[11px] text-slate-100 hover:bg-slate-700 disabled:opacity-60">Refresh news</button>
+          <button type="button" onClick={() => runOps("prune")} disabled={opsLoading} className="rounded-md border border-slate-600 bg-slate-800 px-3 py-1 text-[11px] text-slate-100 hover:bg-slate-700 disabled:opacity-60">Prune cache</button>
+          <button type="button" onClick={() => runOps("clear")} disabled={opsLoading} className="rounded-md border border-rose-700 bg-rose-900/40 px-3 py-1 text-[11px] text-rose-200 hover:bg-rose-900/60 disabled:opacity-60">Clear cache</button>
+        </div>
+
+        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+          <div className="mb-2 text-[11px] text-slate-300">Rate Limit Update</div>
+          <div className="grid gap-2 md:grid-cols-3">
+            <input
+              value={rateLimitKey}
+              onChange={(e) => setRateLimitKey(e.target.value)}
+              className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-100"
+              placeholder="api_read"
+              title="Rate-limit key"
+              aria-label="Rate-limit key"
+            />
+            <input
+              type="number"
+              value={rateLimitValue}
+              onChange={(e) => setRateLimitValue(Number(e.target.value))}
+              className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-100"
+              min={1}
+              placeholder="120"
+              title="Per-minute limit"
+              aria-label="Per-minute limit"
+            />
+            <button type="button" onClick={saveRateLimit} disabled={opsLoading} className="rounded-md border border-sky-600 bg-sky-600 px-3 py-1 text-[11px] font-medium text-slate-50 hover:bg-sky-500 disabled:opacity-60">Save rate limit</button>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+          <div className="mb-2 text-[11px] text-slate-300">Cache stats</div>
+          <pre className="overflow-x-auto text-[11px] text-slate-300">{JSON.stringify(cacheStats || {}, null, 2)}</pre>
         </div>
       </div>
     </div>
