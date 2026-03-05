@@ -19,6 +19,8 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC
 
 from .. import db
+from ..ml.registry import get_meta_competitor_factories
+from ..ml.tournament import run_walk_forward_tournament
 from ..core.utils import iso_date_utc
 from ..models import (
     MLDeployResponse,
@@ -340,6 +342,7 @@ async def build_training_matrices(stock_basket: List[str], lookback_days: int, l
         return {
             "X_numeric": np.zeros((0, 15), dtype=float),
             "y": np.array([], dtype=int),
+            "actual_returns": np.array([], dtype=float),
             "symbols": [],
             "sample_dates": [],
         }
@@ -349,6 +352,7 @@ async def build_training_matrices(stock_basket: List[str], lookback_days: int, l
 
     numeric_rows: List[List[float]] = []
     labels: List[int] = []
+    realized_returns: List[float] = []
     sample_dates: List[str] = []
 
     candidate_dates: set[str] = set()
@@ -402,15 +406,23 @@ async def build_training_matrices(stock_basket: List[str], lookback_days: int, l
                 tp=float(runtime["tp_barrier"]),
                 sl=float(runtime["sl_barrier"]),
             )
+            terminal_idx = min(len(closes) - 1, i + tb_horizon)
+            entry = float(closes[i]) if i < len(closes) else 0.0
+            if entry > 0.0:
+                realized_ret = (float(closes[terminal_idx]) / entry) - 1.0
+            else:
+                realized_ret = 0.0
 
             numeric_rows.append(feats)
             labels.append(int(y))
+            realized_returns.append(float(realized_ret))
             sample_dates.append(dkey)
 
     if not numeric_rows:
         return {
             "X_numeric": np.zeros((0, 15), dtype=float),
             "y": np.array([], dtype=int),
+            "actual_returns": np.array([], dtype=float),
             "symbols": symbols,
             "sample_dates": [],
         }
@@ -418,6 +430,7 @@ async def build_training_matrices(stock_basket: List[str], lookback_days: int, l
     return {
         "X_numeric": np.array(numeric_rows, dtype=float),
         "y": np.array(labels, dtype=int),
+        "actual_returns": np.array(realized_returns, dtype=float),
         "symbols": symbols,
         "sample_dates": sample_dates,
     }
@@ -462,6 +475,8 @@ def _predict_proba_or_hard(model: Any, x: np.ndarray) -> np.ndarray:
 
 def _family_from_algorithm(algorithm: str) -> str:
     algo = (algorithm or "").lower()
+    if "tournament" in algo:
+        return "ensemble"
     if "stack" in algo or "meta" in algo:
         return "ensemble"
     if "ann" in algo or "mlp" in algo:
@@ -919,6 +934,110 @@ def _predict_stacking_model(model_bundle: Dict[str, Any], X: np.ndarray) -> np.n
     return _predict_proba_or_hard(meta, X_meta)
 
 
+def _predict_tournament_model(model_bundle: Dict[str, Any], X: np.ndarray) -> np.ndarray:
+    names = list(model_bundle.get("base_model_names") or [])
+    base_models = dict(model_bundle.get("base_models") or {})
+    combiner = model_bundle.get("winner_model")
+    if not names or not base_models or combiner is None:
+        raise RuntimeError("Invalid tournament model bundle")
+
+    cols: List[np.ndarray] = []
+    for name in names:
+        m = base_models.get(name)
+        if m is None:
+            raise RuntimeError(f"Missing base model in tournament: {name}")
+        cols.append(_predict_proba_or_hard(m, X))
+
+    base_matrix = np.column_stack(cols)
+    allocations: List[float] = []
+    for i in range(base_matrix.shape[0]):
+        alloc = float(combiner.allocate(base_matrix[i], X[i]))
+        allocations.append(float(np.clip(alloc, -1.0, 1.0)))
+
+    alloc_arr = np.asarray(allocations, dtype=float)
+    return np.clip((alloc_arr + 1.0) / 2.0, 0.0, 1.0)
+
+
+def _train_multi_armed_tournament(
+    X: np.ndarray,
+    y: np.ndarray,
+    actual_returns: np.ndarray,
+    splits: List[Tuple[np.ndarray, np.ndarray]],
+    base_factories: List[Tuple[str, Any]],
+    random_seed: int,
+) -> Dict[str, Any]:
+    names = [n for n, _ in base_factories]
+    oof = np.full((X.shape[0], len(names)), np.nan, dtype=float)
+    final_base_models: Dict[str, Any] = {}
+
+    for col_idx, (name, factory) in enumerate(base_factories):
+        _ml_log(f"walk-forward base training (tournament): {name}")
+        res = _fit_score_over_walk_forward(name, factory, X, y, splits, oof_collector=oof[:, col_idx])
+        final_base_models[name] = res["model"]
+
+    valid_mask = ~np.isnan(oof).any(axis=1)
+    if int(np.sum(valid_mask)) < 60:
+        raise RuntimeError("Insufficient OOF rows for tournament combiner")
+
+    valid_indices = np.where(valid_mask)[0]
+    index_map = {int(old_idx): int(new_idx) for new_idx, old_idx in enumerate(valid_indices.tolist())}
+
+    filtered_splits: List[Tuple[np.ndarray, np.ndarray]] = []
+    for tr_idx, te_idx in splits:
+        tr_mapped = [index_map[int(i)] for i in tr_idx.tolist() if int(i) in index_map]
+        te_mapped = [index_map[int(i)] for i in te_idx.tolist() if int(i) in index_map]
+        if len(tr_mapped) < 40 or len(te_mapped) < 10:
+            continue
+        filtered_splits.append((np.asarray(tr_mapped, dtype=int), np.asarray(te_mapped, dtype=int)))
+
+    X_market = X[valid_mask]
+    y_valid = y[valid_mask]
+    returns_valid = np.asarray(actual_returns[valid_mask], dtype=float)
+    base_oof = oof[valid_mask]
+
+    if not filtered_splits:
+        n = base_oof.shape[0]
+        cut = max(40, int(n * 0.7))
+        if n - cut < 10:
+            raise RuntimeError("Insufficient valid rows to evaluate tournament competitors")
+        filtered_splits = [(np.arange(0, cut, dtype=int), np.arange(cut, n, dtype=int))]
+
+    tournament_result = run_walk_forward_tournament(
+        competitor_factories=get_meta_competitor_factories(random_seed=random_seed),
+        base_predictions=base_oof,
+        market_features=X_market,
+        actual_returns=returns_valid,
+        splits=filtered_splits,
+    )
+
+    allocations = np.asarray(
+        [float(tournament_result.winner_model.allocate(base_oof[i], X_market[i])) for i in range(base_oof.shape[0])],
+        dtype=float,
+    )
+    probs = np.clip((np.clip(allocations, -1.0, 1.0) + 1.0) / 2.0, 0.0, 1.0)
+    preds = np.where(probs >= 0.5, 1, 0)
+    metrics = _evaluate_binary(y_valid, preds, probs)
+
+    packed_model = {
+        "kind": "multi_armed_tournament",
+        "base_model_names": names,
+        "base_models": final_base_models,
+        "winner_name": tournament_result.winner_name,
+        "winner_model": tournament_result.winner_model,
+        "competitor_stats": tournament_result.competitor_stats,
+    }
+
+    return {
+        "algorithm": "multi_armed_tournament",
+        "family": "ensemble",
+        "feature_type": "numeric",
+        "model": packed_model,
+        "metrics": metrics,
+        "score": _weighted_score(metrics),
+        "sample_count": int(X.shape[0]),
+    }
+
+
 async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, model_id: Optional[str] = None) -> MLPredictionResponse:
     symbols = list(dict.fromkeys([(s or "").upper().strip() for s in stock_basket if (s or "").strip()]))
     items: List[MLPredictionItem] = []
@@ -949,6 +1068,8 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
         algo = str(doc.get("algorithm") or "")
         if algo == "stacking_meta" and isinstance(model, dict):
             probs = _predict_stacking_model(model, arr)
+        elif algo == "multi_armed_tournament" and isinstance(model, dict):
+            probs = _predict_tournament_model(model, arr)
         else:
             probs = _predict_proba_or_hard(model, arr)
 
@@ -976,6 +1097,8 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
             algo = str(d.get("algorithm") or "")
             if algo == "stacking_meta" and isinstance(model, dict):
                 probs_i = _predict_stacking_model(model, arr)
+            elif algo == "multi_armed_tournament" and isinstance(model, dict):
+                probs_i = _predict_tournament_model(model, arr)
             else:
                 probs_i = _predict_proba_or_hard(model, arr)
             model_probs.append(np.asarray(probs_i, dtype=float))
@@ -1048,12 +1171,18 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
 
     Xn: np.ndarray = dataset["X_numeric"]
     y: np.ndarray = dataset["y"]
+    raw_returns = dataset.get("actual_returns")
+    if raw_returns is None:
+        actual_returns: np.ndarray = np.zeros(Xn.shape[0], dtype=float)
+    else:
+        actual_returns = np.asarray(raw_returns, dtype=float)
     sample_dates: List[str] = list(dataset.get("sample_dates") or [])
 
     if sample_dates and len(sample_dates) == int(Xn.shape[0]):
         order = np.argsort(np.array(sample_dates, dtype=object), kind="stable")
         Xn = Xn[order]
         y = y[order]
+        actual_returns = actual_returns[order]
 
     _ml_log(f"stage: dataset ready | samples={Xn.shape[0]} | labels={len(y)}")
     runs.update_one(
@@ -1102,11 +1231,11 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
 
     try:
         t0 = time.perf_counter()
-        stack_item = _train_stacking_meta(Xn, y, splits, base_jobs)
-        completed.append(stack_item)
-        sm = stack_item.get("metrics") or {}
+        tournament_item = _train_multi_armed_tournament(Xn, y, actual_returns, splits, base_jobs, req.random_seed)
+        completed.append(tournament_item)
+        sm = tournament_item.get("metrics") or {}
         _ml_log(
-            f"training finished: stacking_meta | time={time.perf_counter() - t0:.2f}s | acc={float(sm.get('accuracy', 0.0)):.3f} f1={float(sm.get('f1', 0.0)):.3f}"
+            f"training finished: multi_armed_tournament | time={time.perf_counter() - t0:.2f}s | acc={float(sm.get('accuracy', 0.0)):.3f} f1={float(sm.get('f1', 0.0)):.3f}"
         )
     except Exception:
         failed_jobs += 1
