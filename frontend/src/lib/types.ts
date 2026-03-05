@@ -264,3 +264,18 @@ export interface MLRuntimeSettingsUpdate {
   walk_forward_splits?: number;
   walk_forward_min_train?: number;
 }
+
+export interface MLTournamentCompetitorStat {
+  sharpe: number;
+  max_drawdown: number;
+  mean_return: number;
+  volatility: number;
+  sample_count: number;
+}
+
+export interface MLTournamentStatsResponse {
+  model_id?: string | null;
+  algorithm?: string | null;
+  winner_name?: string | null;
+  competitor_stats: Record<string, MLTournamentCompetitorStat>;
+}

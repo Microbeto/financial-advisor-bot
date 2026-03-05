@@ -16,6 +16,7 @@ import type {
   MLPredictionResponse,
   MLRuntimeSettings,
   MLRuntimeSettingsUpdate,
+  MLTournamentStatsResponse,
 } from "./types";
 import { API_BASE_URL } from "./config";
 
@@ -442,6 +443,13 @@ export async function updateMlRuntimeSettings(payload: MLRuntimeSettingsUpdate) 
   return request<MLRuntimeSettings>("/ml/settings", {
     method: "PUT",
     body: payload,
+    retry: { attempts: 1 },
+  });
+}
+
+export async function getMlTournamentStats(modelId?: string) {
+  const q = modelId ? `?model_id=${encodeURIComponent(modelId)}` : "";
+  return request<MLTournamentStatsResponse>(`/ml/models/tournament-stats${q}`, {
     retry: { attempts: 1 },
   });
 }
