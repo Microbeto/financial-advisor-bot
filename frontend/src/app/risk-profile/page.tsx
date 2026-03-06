@@ -10,7 +10,7 @@ const EMPTY: RiskProfile = {
   client_name: "",
   age: null,
   horizon_years: null,
-  risk_tolerance: "moderate",
+  risk_tolerance: "balanced",
   max_drawdown_pct: null,
   income_stability: "",
   constraints: [],
@@ -39,7 +39,7 @@ const RISK_TEMPLATES: Record<
     label: "Low risk (capital preservation)",
     subtitle:
       "Small drawdowns, smoother ride, underperforms in strong bull markets.",
-    risk_tolerance: "conservative",
+    risk_tolerance: "low",
     horizon_years: 3,
     max_drawdown_pct: 15,
     income_stability: "stable",
@@ -49,7 +49,7 @@ const RISK_TEMPLATES: Record<
     label: "Balanced",
     subtitle:
       "Blend of growth and protection, closer to a classic 60/40 portfolio.",
-    risk_tolerance: "moderate",
+    risk_tolerance: "balanced",
     horizon_years: 5,
     max_drawdown_pct: 25,
     income_stability: "stable",
@@ -100,7 +100,7 @@ const CONSTRAINT_OPTIONS: { id: string; label: string; description: string }[] =
 
 // ---- Regime & policy mirror of backend ------------------------------------
 
-type RegimeKey = "conservative" | "balanced" | "aggressive";
+type RegimeKey = "low" | "balanced" | "aggressive";
 
 type RegimeLimits = {
   regime: RegimeKey;
@@ -113,8 +113,8 @@ type RegimeLimits = {
 };
 
 const REGIME_LIMITS: Record<RegimeKey, RegimeLimits> = {
-  conservative: {
-    regime: "conservative",
+  low: {
+    regime: "low",
     max_position_pct: 0.12,
     max_cash_pct: 0.6,
     min_momentum: 0.0,
@@ -143,10 +143,9 @@ const REGIME_LIMITS: Record<RegimeKey, RegimeLimits> = {
 };
 
 function inferRegimeFromProfile(profile: RiskProfile | null): RegimeKey {
-  const rt = (profile?.risk_tolerance ?? "moderate").toLowerCase();
-  if (rt === "aggressive" || rt === "high") return "aggressive";
-  if (rt === "conservative" || rt === "low") return "conservative";
-  // default to balanced for "moderate" and anything else
+  const rt = (profile?.risk_tolerance ?? "balanced").toLowerCase();
+  if (rt === "aggressive") return "aggressive";
+  if (rt === "low") return "low";
   return "balanced";
 }
 
@@ -301,12 +300,12 @@ export default function RiskProfilePage() {
 
   const selectedModel = rankedTopModels.find((m) => m.model_id === simModelId) ?? null;
   const baseReturnByRegime: Record<RegimeKey, number> = {
-    conservative: 7.8,
+    low: 7.8,
     balanced: 10.6,
     aggressive: 14.2,
   };
   const baseDrawdownByRegime: Record<RegimeKey, number> = {
-    conservative: 9.2,
+    low: 9.2,
     balanced: 14.8,
     aggressive: 22.6,
   };
@@ -718,8 +717,8 @@ export default function RiskProfilePage() {
               }
               className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-50 focus:outline-none focus:ring-1 focus:ring-sky-500"
             >
-              <option value="conservative">Conservative</option>
-              <option value="moderate">Moderate</option>
+              <option value="low">Low</option>
+              <option value="balanced">Balanced</option>
               <option value="aggressive">Aggressive</option>
             </select>
           </div>

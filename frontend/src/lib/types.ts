@@ -23,7 +23,7 @@ export interface RiskProfile {
   client_name: string | null;
   age: number | null;
   horizon_years: number | null;
-  risk_tolerance: "conservative" | "moderate" | "aggressive" | string;
+  risk_tolerance: "low" | "balanced" | "aggressive";
   max_drawdown_pct: number | null;
   income_stability: string | null;
   constraints: string[];

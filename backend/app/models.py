@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 Role = Literal["user", "premium", "admin", "manager"]
-RiskTolerance = Literal["low", "balanced", "aggressive"]
+
+
+class RiskToleranceEnum(str, Enum):
+    LOW = "low"
+    BALANCED = "balanced"
+    AGGRESSIVE = "aggressive"
+
+
+RiskTolerance = RiskToleranceEnum
 Regime = Literal["risk_on", "risk_off", "neutral"]
 TrendDirection = Literal["up", "down"]
 
@@ -67,7 +76,7 @@ class AdminUserSecurity(BaseModel):
 
 
 class AdminUserFinancialContext(BaseModel):
-    risk_tolerance: str = "balanced"
+    risk_tolerance: RiskTolerance = RiskTolerance.BALANCED
     horizon_years: Optional[int] = None
     max_drawdown_pct: Optional[float] = None
     constraints: List[str] = Field(default_factory=list)
