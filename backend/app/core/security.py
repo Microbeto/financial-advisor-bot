@@ -6,6 +6,8 @@ import hmac
 import os
 from typing import Any, Dict, Optional
 
+import jwt
+
 _SECRET = os.getenv("APP_SECRET", "dev-secret-change-me")
 
 
@@ -34,25 +36,18 @@ def pbkdf2_verify_password(password: str, stored: str) -> bool:
 
 
 def sign_token(payload: Dict[str, Any]) -> str:
-    msg = repr(sorted(payload.items())).encode("utf-8")
-    sig = hmac.new(_SECRET.encode("utf-8"), msg, hashlib.sha256).digest()
-    return (
-        base64.urlsafe_b64encode(msg).decode().rstrip("=")
-        + "."
-        + base64.urlsafe_b64encode(sig).decode().rstrip("=")
-    )
+    token = jwt.encode(payload, _SECRET, algorithm="HS256")
+    # PyJWT may return bytes in older versions; normalize to str.
+    if isinstance(token, bytes):
+        return token.decode("utf-8")
+    return str(token)
 
 
 def verify_token(token: str) -> Optional[Dict[str, Any]]:
     try:
-        msg_b64, sig_b64 = token.split(".", 1)
-        msg = base64.urlsafe_b64decode(msg_b64 + "==")
-        sig = base64.urlsafe_b64decode(sig_b64 + "==")
-        expected = hmac.new(_SECRET.encode("utf-8"), msg, hashlib.sha256).digest()
-        if not hmac.compare_digest(sig, expected):
-            return None
-        s = msg.decode("utf-8")
-        items = eval(s, {"__builtins__": {}})
-        return dict(items)
+        payload = jwt.decode(token, _SECRET, algorithms=["HS256"])
+        if isinstance(payload, dict):
+            return payload
+        return None
     except Exception:
         return None
