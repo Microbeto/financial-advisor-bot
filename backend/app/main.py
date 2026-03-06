@@ -113,6 +113,18 @@ async def _acquire_limit(key: str) -> None:
         return
 
 
+def _acquire_limit_sync(key: str) -> None:
+    """
+    Run async limiter acquisition from sync routes executed in FastAPI's threadpool.
+    """
+    try:
+        import anyio
+
+        anyio.from_thread.run(_acquire_limit, key)
+    except Exception:
+        return
+
+
 def _extract_bearer_token(authorization: str | None) -> str | None:
     raw = (authorization or "").strip()
     if not raw:
@@ -425,8 +437,8 @@ def create_app() -> FastAPI:
             raise
 
     @app.get("/health")
-    async def health():
-        await _acquire_limit("api_health")
+    def health():
+        _acquire_limit_sync("api_health")
         db_ok = True
         try:
             _ = db.get_db()
@@ -435,26 +447,26 @@ def create_app() -> FastAPI:
         return {"ok": True, "db": db_ok}
 
     @app.get("/glossary", response_model=GlossaryResponse)
-    async def glossary():
-        await _acquire_limit("api_read")
+    def glossary():
+        _acquire_limit_sync("api_read")
         return GlossaryResponse(terms=lingo_glossary())
 
     @app.post("/auth/register", response_model=AuthResponse)
-    async def register(payload: RegisterRequest):
-        await _acquire_limit("api_write")
+    def register(payload: RegisterRequest):
+        _acquire_limit_sync("api_write")
         user = create_user(email=payload.email, password=payload.password, role="user")
         auth = login_user(email=payload.email, password=payload.password)
         auth.user_id = user.user_id
         return auth
 
     @app.post("/auth/login", response_model=AuthResponse)
-    async def login(payload: LoginRequest):
-        await _acquire_limit("api_write")
+    def login(payload: LoginRequest):
+        _acquire_limit_sync("api_write")
         return login_user(email=payload.email, password=payload.password)
 
     @app.get("/auth/me", response_model=UserPublic)
-    async def auth_me(authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_read")
+    def auth_me(authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_read")
         claims = _claims_required(authorization)
         return UserPublic(
             user_id=str(claims.get("uid", "")),
@@ -464,8 +476,8 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/auth/users", response_model=list[UserPublic])
-    async def auth_users(authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def auth_users(authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
         return list_users()
@@ -473,8 +485,8 @@ def create_app() -> FastAPI:
     PUBLIC_UID = "public"
 
     @app.get("/risk-profile", response_model=RiskProfile)
-    async def get_profile(authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_read")
+    def get_profile(authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_read")
         claims = _claims_optional(authorization)
         uid = str(claims.get("uid")) if claims else PUBLIC_UID
 
@@ -484,8 +496,8 @@ def create_app() -> FastAPI:
         return ensure_risk_profile_for_user(uid)
 
     @app.put("/risk-profile", response_model=RiskProfile)
-    async def put_profile(profile: RiskProfile, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_write")
+    def put_profile(profile: RiskProfile, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_write")
         claims = _claims_optional(authorization)
         uid = str(claims.get("uid")) if claims else PUBLIC_UID
         return upsert_risk_profile_for_user(uid, profile)
@@ -529,8 +541,8 @@ def create_app() -> FastAPI:
         return PortfolioSnapshot(cash=0.0, holdings=[])
 
     @app.post("/portfolio", response_model=PortfolioSnapshot)
-    async def portfolio_post(snapshot: PortfolioSnapshot, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_write")
+    def portfolio_post(snapshot: PortfolioSnapshot, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_write")
         claims = _claims_required(authorization)
         uid = str(claims.get("uid", ""))
 
@@ -544,15 +556,15 @@ def create_app() -> FastAPI:
         return snapshot
 
     @app.get("/audit-log")
-    async def audit_log_get(authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_read")
+    def audit_log_get(authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_read")
         claims = _claims_required(authorization)
         require_roles(claims, ("premium", "admin", "manager"))
         return _build_ml_audit_entries()
 
     @app.post("/audit-log/clear")
-    async def audit_log_clear(authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_write")
+    def audit_log_clear(authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_write")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
 
@@ -683,45 +695,45 @@ def create_app() -> FastAPI:
         return await _maybe_await(train_models_async, req)
 
     @app.get("/ml/models", response_model=MLModelListResponse)
-    async def ml_models_list(authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def ml_models_list(authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("premium", "admin", "manager"))
         return MLModelListResponse(items=list_models())
 
     @app.get("/ml/models/tournament-stats", response_model=MLTournamentStatsResponse)
-    async def ml_models_tournament_stats(model_id: str | None = None, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def ml_models_tournament_stats(model_id: str | None = None, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("premium", "admin", "manager"))
         out = get_tournament_competitor_stats(model_id=model_id)
         return MLTournamentStatsResponse(**out)
 
     @app.post("/ml/models/select", response_model=MLSelectionResponse)
-    async def ml_select(req: MLSelectionRequest, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def ml_select(req: MLSelectionRequest, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
         return select_best_models(top_k=req.top_k)
 
     @app.post("/ml/models/prune", response_model=MLPruneResponse)
-    async def ml_prune(req: MLPruneRequest, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def ml_prune(req: MLPruneRequest, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
         return prune_underperforming_models(min_f1=req.min_f1, min_accuracy=req.min_accuracy)
 
     @app.get("/ml/settings", response_model=MLRuntimeSettingsResponse)
-    async def ml_settings_get(authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def ml_settings_get(authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
         out = get_ml_runtime_settings()
         return MLRuntimeSettingsResponse(**out)
 
     @app.put("/ml/settings", response_model=MLRuntimeSettingsResponse)
-    async def ml_settings_put(req: MLRuntimeSettingsUpdateRequest, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def ml_settings_put(req: MLRuntimeSettingsUpdateRequest, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
         out = update_ml_runtime_settings(req.model_dump(exclude_none=True))
@@ -747,45 +759,45 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/universe/custom")
-    async def get_custom_universe(authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_read")
+    def get_custom_universe(authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_read")
         claims = _claims_required(authorization)
         require_roles(claims, ("premium", "admin", "manager"))
         uid = str(claims.get("uid", ""))
         return {"symbols": get_user_custom_universe(uid)}
 
     @app.put("/universe/custom")
-    async def put_custom_universe(req: CustomUniverseRequest, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_write")
+    def put_custom_universe(req: CustomUniverseRequest, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_write")
         claims = _claims_required(authorization)
         require_roles(claims, ("premium", "admin", "manager"))
         uid = str(claims.get("uid", ""))
         return {"symbols": set_user_custom_universe(uid, req.symbols)}
 
     @app.get("/admin/cache/stats")
-    async def admin_cache_stats(authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def admin_cache_stats(authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
         return get_cache_stats()
 
     @app.post("/admin/cache/prune")
-    async def admin_cache_prune(max_age_days: int | None = None, dry_run: bool = True, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def admin_cache_prune(max_age_days: int | None = None, dry_run: bool = True, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
         return prune_stale_cache(max_age_days=max_age_days, dry_run=dry_run)
 
     @app.post("/admin/cache/clear")
-    async def admin_cache_clear(scope: str = "stale", max_age_days: int | None = None, dry_run: bool = False, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def admin_cache_clear(scope: str = "stale", max_age_days: int | None = None, dry_run: bool = False, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
         return clear_cache(scope=scope, max_age_days=max_age_days, dry_run=dry_run)
 
     @app.post("/admin/scheduler/run-daily")
-    async def admin_run_daily(authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def admin_run_daily(authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
         run_daily()
@@ -801,8 +813,8 @@ def create_app() -> FastAPI:
         return {"ok": True, "count": len(items)}
 
     @app.put("/admin/rate-limit")
-    async def admin_rate_limit(req: RateLimitUpdateRequest, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def admin_rate_limit(req: RateLimitUpdateRequest, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
         from .core.rate_limit import limiter  # type: ignore
@@ -811,15 +823,15 @@ def create_app() -> FastAPI:
         return {"ok": True, "key": req.key, "per_minute": req.per_minute}
 
     @app.get("/admin/users", response_model=UserListResponse)
-    async def admin_users(authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def admin_users(authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
         return UserListResponse(items=list_users())
 
     @app.get("/admin/users/{user_id}/detail", response_model=AdminUserDetailResponse)
-    async def admin_user_detail(user_id: str, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def admin_user_detail(user_id: str, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
 
@@ -913,8 +925,8 @@ def create_app() -> FastAPI:
         )
 
     @app.put("/admin/users/{user_id}/status")
-    async def admin_user_status(user_id: str, req: AdminUserStatusUpdateRequest, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def admin_user_status(user_id: str, req: AdminUserStatusUpdateRequest, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
 
@@ -939,8 +951,8 @@ def create_app() -> FastAPI:
         return {"ok": True, "user_id": user_id, "status": req.status}
 
     @app.post("/admin/users/{user_id}/reset-state", response_model=AdminUserStateResetResponse)
-    async def admin_user_reset_state(user_id: str, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def admin_user_reset_state(user_id: str, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
 
@@ -956,8 +968,8 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/admin/users/{user_id}/export", response_model=AdminUserExportResponse)
-    async def admin_user_export(user_id: str, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def admin_user_export(user_id: str, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
 
@@ -1018,8 +1030,8 @@ def create_app() -> FastAPI:
         )
 
     @app.delete("/admin/users/{user_id}/purge")
-    async def admin_user_purge(user_id: str, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def admin_user_purge(user_id: str, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
 
@@ -1051,8 +1063,8 @@ def create_app() -> FastAPI:
         return {"ok": True, "deleted": deleted}
 
     @app.put("/admin/users/{user_id}/role")
-    async def admin_update_user_role(user_id: str, req: RoleUpdateRequest, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def admin_update_user_role(user_id: str, req: RoleUpdateRequest, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
         u = update_user_role(user_id, req.role)
@@ -1061,8 +1073,8 @@ def create_app() -> FastAPI:
         return u
 
     @app.delete("/admin/users/{user_id}")
-    async def admin_delete_user(user_id: str, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def admin_delete_user(user_id: str, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
         ok = delete_user(user_id)
@@ -1071,32 +1083,32 @@ def create_app() -> FastAPI:
         return {"ok": True}
 
     @app.put("/manager/universe")
-    async def manager_update_universe(req: UniverseUpdateRequest, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def manager_update_universe(req: UniverseUpdateRequest, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("manager", "admin"))
         vals = set_universe_override(req.key, req.symbols)
         return {"key": req.key, "symbols": vals}
 
     @app.put("/manager/glossary")
-    async def manager_set_glossary(req: GlossaryTermUpdateRequest, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def manager_set_glossary(req: GlossaryTermUpdateRequest, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("manager", "admin"))
         set_glossary_term(req.key, req.value)
         return {"ok": True}
 
     @app.delete("/manager/glossary/{key}")
-    async def manager_delete_glossary(key: str, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def manager_delete_glossary(key: str, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("manager", "admin"))
         remove_glossary_term(key)
         return {"ok": True}
 
     @app.put("/manager/policy/constraints", response_model=PolicyConstraintResponse)
-    async def manager_policy_constraints(req: PolicyConstraintRequest, authorization: str | None = Header(default=None)):
-        await _acquire_limit("api_ml_admin")
+    def manager_policy_constraints(req: PolicyConstraintRequest, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("manager", "admin"))
         pe = PolicyEngine()
