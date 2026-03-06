@@ -462,6 +462,13 @@ def create_app() -> FastAPI:
             created_at=db.utc_now(),
         )
 
+    @app.get("/auth/users", response_model=list[UserPublic])
+    async def auth_users(authorization: str | None = Header(default=None)):
+        await _acquire_limit("api_ml_admin")
+        claims = _claims_required(authorization)
+        require_roles(claims, ("admin",))
+        return list_users()
+
     PUBLIC_UID = "public"
 
     @app.get("/risk-profile", response_model=RiskProfile)

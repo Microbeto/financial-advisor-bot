@@ -255,7 +255,7 @@ export async function me() {
 }
 
 export async function listUsers() {
-  return request<{ items: UserPublic[] }>("/auth/users", {
+  return request<UserPublic[]>("/auth/users", {
     retry: { attempts: 1 },
   });
 }
@@ -349,12 +349,41 @@ export async function clearAuditLog(userId?: string) {
   }
 }
 
-/** Recommendations (not implemented in backend yet) */
+/** Recommendations (backed by live ML predictions) */
 export async function getRecommendations(portfolio: PortfolioSnapshot, userId?: string) {
-  return request<Recommendation[]>("/recommendations", {
+  const symbols = Array.from(
+    new Set(
+      (portfolio?.holdings ?? [])
+        .map((h) => String(h.symbol || "").trim().toUpperCase())
+        .filter(Boolean)
+    )
+  );
+
+  if (!symbols.length) return [];
+
+  const pred = await request<MLPredictionResponse>("/ml/predict", {
     method: "POST",
-    body: portfolio,
+    body: {
+      stock_basket: symbols,
+      lookback_days: 120,
+    },
     userId,
+    timeoutMs: 90000,
+    retry: { attempts: 2, baseDelayMs: 400, maxDelayMs: 3000 },
+  });
+
+  return (pred.items ?? []).map((item) => {
+    const pUp = Number(item.probability_up ?? 0.5);
+    const action: Recommendation["action"] = pUp >= 0.55 ? "BUY" : pUp <= 0.45 ? "SELL" : "HOLD";
+    const confidence = Math.max(0, Math.min(1, Math.abs(pUp - 0.5) * 2));
+
+    return {
+      symbol: item.symbol,
+      action,
+      size: action === "HOLD" ? 0 : 1,
+      confidence,
+      rationale: `ML tournament probability_up=${pUp.toFixed(3)} via model ${pred.model_id}`,
+    };
   });
 }
 
