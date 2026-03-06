@@ -339,7 +339,14 @@ class _FinBertInferencer:
         return out
 
 
-_FINBERT = _FinBertInferencer()
+_FINBERT: Optional[_FinBertInferencer] = None
+
+
+def _get_finbert() -> _FinBertInferencer:
+    global _FINBERT
+    if _FINBERT is None:
+        _FINBERT = _FinBertInferencer()
+    return _FINBERT
 
 
 @dataclass
@@ -383,12 +390,13 @@ def _daily_news_features(date: str, symbols: Sequence[str]) -> _DailyNewsFeature
         else:
             market_texts.append(txt)
 
-    market_scores = _FINBERT.score_texts(market_texts or all_texts)
+    finbert = _get_finbert()
+    market_scores = finbert.score_texts(market_texts or all_texts)
     market_sent = float(np.mean(market_scores)) if market_scores else 0.0
 
     symbol_sent: Dict[str, float] = {}
     for sym in syms:
-        s_scores = _FINBERT.score_texts(symbol_texts.get(sym) or [])
+        s_scores = finbert.score_texts(symbol_texts.get(sym) or [])
         if s_scores:
             symbol_sent[sym] = float(np.mean(s_scores))
         else:
