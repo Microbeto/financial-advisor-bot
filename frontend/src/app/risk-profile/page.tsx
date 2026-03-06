@@ -2,7 +2,12 @@
 
 import { useEffect, useState } from "react";
 import type { MLModelInfo, RiskProfile } from "@/lib/types";
-import { getMlModels, getRiskProfile, saveRiskProfile } from "@/lib/api-client";
+import {
+  getMarketHistory,
+  getMlModels,
+  getRiskProfile,
+  saveRiskProfile,
+} from "@/lib/api-client";
 import { RequireAuth } from "@/components/require-auth";
 import { useAuth } from "@/lib/auth-context";
 
@@ -16,10 +21,38 @@ const EMPTY: RiskProfile = {
   constraints: [],
 };
 
-const sp500Curve = [100, 104, 110, 95, 120, 130, 125, 140];
-const lowRiskCurve = [100, 102, 104, 103, 106, 108, 110, 112];
-const balancedCurve = [100, 103, 108, 100, 115, 122, 120, 130];
-const aggressiveCurve = [100, 106, 115, 95, 130, 145, 135, 160];
+const RISK_COLORS = {
+  sp500: "#38bdf8",
+  low: "#22c55e",
+  balanced: "#a855f7",
+  aggressive: "#f97316",
+} as const;
+
+type ChartSeries = {
+  name: "S&P 500" | "Low risk" | "Balanced" | "Aggressive";
+  color: string;
+  data: number[];
+};
+
+const RISK_TEXT_CLASS: Record<Exclude<ChartSeries["name"], "S&P 500">, string> = {
+  "Low risk": "text-[#22c55e]",
+  Balanced: "text-[#a855f7]",
+  Aggressive: "text-[#f97316]",
+};
+
+const RISK_DOT_CLASS: Record<ChartSeries["name"], string> = {
+  "S&P 500": "bg-[#38bdf8]",
+  "Low risk": "bg-[#22c55e]",
+  Balanced: "bg-[#a855f7]",
+  Aggressive: "bg-[#f97316]",
+};
+
+const FALLBACK_SERIES: ChartSeries[] = [
+  { name: "S&P 500", color: RISK_COLORS.sp500, data: [100, 104, 110, 95, 120, 130, 125, 140] },
+  { name: "Low risk", color: RISK_COLORS.low, data: [100, 102, 104, 103, 106, 108, 110, 112] },
+  { name: "Balanced", color: RISK_COLORS.balanced, data: [100, 103, 108, 100, 115, 122, 120, 130] },
+  { name: "Aggressive", color: RISK_COLORS.aggressive, data: [100, 106, 115, 95, 130, 145, 135, 160] },
+];
 
 type TemplateKey = "low" | "balanced" | "aggressive";
 
@@ -162,6 +195,10 @@ export default function RiskProfilePage() {
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateKey | null>(
     null,
   );
+  const [chartSeries, setChartSeries] = useState<ChartSeries[]>(FALLBACK_SERIES);
+  const [chartLoading, setChartLoading] = useState(false);
+  const [chartError, setChartError] = useState<string | null>(null);
+  const [chartRangeLabel, setChartRangeLabel] = useState<string>("Last 3 years");
 
   const canViewMlBacktest = role === "premium" || role === "admin" || role === "manager";
 
@@ -233,6 +270,115 @@ export default function RiskProfilePage() {
       [...mlModels].sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999))[0];
     setSimModelId(selected?.model_id ?? null);
   }, [mlModels]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    function downsample(values: number[], maxPoints = 80): number[] {
+      if (values.length <= maxPoints) return values;
+      const sampled: number[] = [];
+      const step = (values.length - 1) / (maxPoints - 1);
+      for (let i = 0; i < maxPoints; i += 1) {
+        const idx = Math.round(i * step);
+        sampled.push(values[idx]);
+      }
+      return sampled;
+    }
+
+    function buildRiskPath(
+      prices: number[],
+      upMultiplier: number,
+      downMultiplier: number,
+    ): number[] {
+      if (prices.length < 2) return [100];
+      const result: number[] = [100];
+      for (let i = 1; i < prices.length; i += 1) {
+        const prevPrice = prices[i - 1];
+        const currPrice = prices[i];
+        if (!Number.isFinite(prevPrice) || !Number.isFinite(currPrice) || prevPrice <= 0) {
+          result.push(result[result.length - 1]);
+          continue;
+        }
+
+        const ret = currPrice / prevPrice - 1;
+        const applied = ret >= 0 ? ret * upMultiplier : ret * downMultiplier;
+        const next = result[result.length - 1] * (1 + applied);
+        result.push(Math.max(1, next));
+      }
+      return result;
+    }
+
+    async function loadChartData() {
+      try {
+        setChartLoading(true);
+        setChartError(null);
+
+        const modelF1 =
+          mlModels.find((m) => m.model_id === simModelId)?.metrics?.f1 ?? 0.5;
+        const modelTilt = Math.max(-0.15, Math.min(0.2, (modelF1 - 0.5) * 0.6));
+
+        const res = await getMarketHistory("SPY", 1095);
+        const points = [...(res.points ?? [])]
+          .filter((p) => Number.isFinite(Number(p.c)) && Number(p.c) > 0)
+          .sort((a, b) => String(a.t).localeCompare(String(b.t)));
+
+        if (points.length < 40) {
+          throw new Error("Insufficient market history points");
+        }
+
+        const prices = points.map((p) => Number(p.c));
+        const sp500Path = buildRiskPath(prices, 1.0, 1.0);
+        const lowPath = buildRiskPath(
+          prices,
+          0.72 + modelTilt * 0.2,
+          0.58 + modelTilt * 0.1,
+        );
+        const balancedPath = buildRiskPath(
+          prices,
+          0.98 + modelTilt * 0.4,
+          0.92 + modelTilt * 0.25,
+        );
+        const aggressivePath = buildRiskPath(
+          prices,
+          1.28 + modelTilt * 0.7,
+          1.22 + modelTilt * 0.5,
+        );
+
+        const sampledSp500 = downsample(sp500Path);
+        const sampledLow = downsample(lowPath);
+        const sampledBalanced = downsample(balancedPath);
+        const sampledAggressive = downsample(aggressivePath);
+
+        if (!cancelled) {
+          setChartSeries([
+            { name: "S&P 500", color: RISK_COLORS.sp500, data: sampledSp500 },
+            { name: "Low risk", color: RISK_COLORS.low, data: sampledLow },
+            { name: "Balanced", color: RISK_COLORS.balanced, data: sampledBalanced },
+            { name: "Aggressive", color: RISK_COLORS.aggressive, data: sampledAggressive },
+          ]);
+
+          const start = String(points[0].t).slice(0, 10);
+          const end = String(points[points.length - 1].t).slice(0, 10);
+          setChartRangeLabel(`${start} to ${end}`);
+        }
+      } catch {
+        if (!cancelled) {
+          setChartSeries(FALLBACK_SERIES);
+          setChartError(
+            "Unable to load 3-year SPY history. Showing fallback preview curves.",
+          );
+          setChartRangeLabel("Fallback preview");
+        }
+      } finally {
+        if (!cancelled) setChartLoading(false);
+      }
+    }
+
+    void loadChartData();
+    return () => {
+      cancelled = true;
+    };
+  }, [mlModels, simModelId]);
 
   function handleChange<K extends keyof RiskProfile>(key: K, value: RiskProfile[K]) {
     setProfile((prev) => ({
@@ -345,28 +491,39 @@ export default function RiskProfilePage() {
           How risk profiles behave vs S&amp;P 500
         </h2>
         <p className="mb-4 max-w-2xl text-xs text-slate-400">
-          Each line represents a hypothetical P&amp;L path normalised to 100 at
-          the start. Low risk hugs the S&amp;P 500 with smaller swings, balanced is
-          in between, and aggressive amplifies both gains and drawdowns.
+          Each line is normalised to 100 at the start and built from real
+          S&amp;P 500 history over the last 3 years, adjusted by your selected ML
+          model profile.
         </p>
-        <RiskComparisonChart />
+        <div className="mb-2 text-[11px] text-slate-400">
+          Data window: {chartRangeLabel}
+          {chartLoading ? " (updating...)" : ""}
+        </div>
+        {chartError && <p className="mb-2 text-[11px] text-amber-300">{chartError}</p>}
+        <RiskComparisonChart series={chartSeries} />
         <div className="mt-3 grid gap-3 text-[11px] text-slate-300 md:grid-cols-3">
           <div>
-            <div className="font-semibold text-cyan-300">Low risk</div>
+            <div className={["font-semibold", RISK_TEXT_CLASS["Low risk"]].join(" ")}>
+              Low risk
+            </div>
             <p>
               Lower volatility, smaller drawdowns, tends to lag the S&amp;P 500 in
               strong bull markets but protects more in sell-offs.
             </p>
           </div>
           <div>
-            <div className="font-semibold text-sky-300">Balanced</div>
+            <div className={["font-semibold", RISK_TEXT_CLASS.Balanced].join(" ")}>
+              Balanced
+            </div>
             <p>
               Drawdowns and long-run returns closer to the S&amp;P 500, but with
               some downside cushioning.
             </p>
           </div>
           <div>
-            <div className="font-semibold text-emerald-300">Aggressive</div>
+            <div className={["font-semibold", RISK_TEXT_CLASS.Aggressive].join(" ")}>
+              Aggressive
+            </div>
             <p>
               Higher upside potential but deeper drawdowns and higher volatility
               vs the S&amp;P 500, especially in stressed markets.
@@ -811,13 +968,7 @@ export default function RiskProfilePage() {
   );
 }
 
-function RiskComparisonChart() {
-  const series = [
-    { name: "S&P 500", color: "#38bdf8", data: sp500Curve },
-    { name: "Low risk", color: "#22c55e", data: lowRiskCurve },
-    { name: "Balanced", color: "#a855f7", data: balancedCurve },
-    { name: "Aggressive", color: "#f97316", data: aggressiveCurve },
-  ];
+function RiskComparisonChart({ series }: { series: ChartSeries[] }) {
 
   const allValues = series.flatMap((s) => s.data);
   const minV = Math.min(...allValues);
@@ -863,16 +1014,9 @@ function RiskComparisonChart() {
         {series.map((s) => (
           <div key={s.name} className="inline-flex items-center gap-1">
             <span
-              className={[
-                "inline-block h-2 w-2 rounded-sm",
-                s.name === "S&P 500"
-                  ? "bg-sky-400"
-                  : s.name === "Low risk"
-                  ? "bg-green-500"
-                  : s.name === "Balanced"
-                  ? "bg-purple-500"
-                  : "bg-orange-500",
-              ].join(" ")}
+              className={["inline-block h-2 w-2 rounded-sm", RISK_DOT_CLASS[s.name]].join(
+                " ",
+              )}
             />
             <span>{s.name}</span>
           </div>
