@@ -54,6 +54,24 @@ TRIPLE_BARRIER_HOLD_DAYS = int(os.getenv("ML_TIME_BARRIER_DAYS", "20"))
 
 FINBERT_MODEL_NAME = os.getenv("FINBERT_MODEL_NAME", "ProsusAI/finbert")
 FINBERT_BATCH_SIZE = int(os.getenv("FINBERT_BATCH_SIZE", "16"))
+FINBERT_RETRY_SECONDS = int(os.getenv("FINBERT_RETRY_SECONDS", "300"))
+
+
+def _finbert_candidates() -> List[str]:
+    raw = os.getenv("FINBERT_MODEL_CANDIDATES", "").strip()
+    env_vals = [x.strip() for x in raw.split(",") if x.strip()] if raw else []
+
+    defaults = [
+        FINBERT_MODEL_NAME,
+        "ProsusAI/finbert",
+        "yiyanghkust/finbert-tone",
+    ]
+
+    out: List[str] = []
+    for name in env_vals + defaults:
+        if name and name not in out:
+            out.append(name)
+    return out
 
 _RUNTIME_SETTINGS_DEFAULTS: Dict[str, Any] = {
     "tp_barrier": float(TRIPLE_BARRIER_TP),
@@ -225,31 +243,77 @@ class _FinBertInferencer:
         self._tokenizer = None
         self._model = None
         self._torch = None
+        self._active_model_name = ""
+        self._last_init_attempt_ts = 0.0
+        self._last_error = ""
         self._init()
 
     def _init(self) -> None:
+        self._last_init_attempt_ts = time.time()
         try:
             torch_mod = importlib.import_module("torch")
             tr_mod = importlib.import_module("transformers")
-            tokenizer = tr_mod.AutoTokenizer.from_pretrained(FINBERT_MODEL_NAME)
-            model = tr_mod.AutoModelForSequenceClassification.from_pretrained(FINBERT_MODEL_NAME)
-            model.eval()
-            self._torch = torch_mod
-            self._tokenizer = tokenizer
-            self._model = model
-            self._ready = True
-            _ml_log(f"FinBERT loaded: {FINBERT_MODEL_NAME}")
-        except Exception:
+        except Exception as exc:
             self._ready = False
             self._tokenizer = None
             self._model = None
             self._torch = None
-            _ml_log("FinBERT unavailable, using lexicon fallback sentiment")
+            self._last_error = f"import_failed:{exc}"
+            _ml_log("FinBERT import failed, will use lexicon fallback unless imports become available")
+            return
+
+        cache_dir = os.getenv("FINBERT_CACHE_DIR", "").strip() or None
+        candidates = _finbert_candidates()
+        errors: List[str] = []
+
+        for model_name in candidates:
+            for local_only in (True, False):
+                mode = "cache-only" if local_only else "download"
+                try:
+                    kwargs: Dict[str, Any] = {"local_files_only": local_only}
+                    if cache_dir:
+                        kwargs["cache_dir"] = cache_dir
+
+                    tokenizer = tr_mod.AutoTokenizer.from_pretrained(model_name, **kwargs)
+                    model = tr_mod.AutoModelForSequenceClassification.from_pretrained(model_name, **kwargs)
+                    model.eval()
+
+                    # GPU is optional; CPU path is valid and should not trigger fallback.
+                    if bool(getattr(torch_mod, "cuda", None)) and torch_mod.cuda.is_available():
+                        try:
+                            model = model.to("cuda")
+                        except Exception:
+                            pass
+
+                    self._torch = torch_mod
+                    self._tokenizer = tokenizer
+                    self._model = model
+                    self._ready = True
+                    self._active_model_name = str(model_name)
+                    self._last_error = ""
+                    _ml_log(f"FinBERT loaded: {model_name} ({mode})")
+                    return
+                except Exception as exc:
+                    errors.append(f"{model_name}[{mode}]={exc}")
+
+        # All attempts exhausted: lexicon is the final fallback.
+            self._ready = False
+            self._tokenizer = None
+            self._model = None
+            self._torch = None
+        self._active_model_name = ""
+        self._last_error = " | ".join(errors[:4]) if errors else "unknown"
+        _ml_log(f"FinBERT unavailable after all attempts, using lexicon fallback sentiment | {self._last_error}")
 
     def score_texts(self, texts: Sequence[str]) -> List[float]:
         cleaned = [str(t or "").strip() for t in texts]
         if not cleaned:
             return []
+
+        # Retry FinBERT initialization periodically so temporary startup/network failures
+        # do not permanently lock the process into lexicon mode.
+        if not self._ready and (time.time() - float(self._last_init_attempt_ts)) >= max(10, FINBERT_RETRY_SECONDS):
+            self._init()
 
         if not self._ready or self._tokenizer is None or self._model is None or self._torch is None:
             return [_sentiment_score_text(t) for t in cleaned]

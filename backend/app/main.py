@@ -80,6 +80,7 @@ from .services.ml_workflow import (
 )
 from .core.utils import iso_date_utc
 from .engine.glossary import lingo_glossary, remove_glossary_term, set_glossary_term
+from .ml.model_router import intelligence_router
 
 
 def _parse_cors_origins() -> list[str]:
@@ -183,6 +184,14 @@ async def lifespan(app: FastAPI):
         bootstrap_admin_if_configured()
     except Exception:
         pass
+
+    try:
+        diagnostics = await intelligence_router.run_diagnostics()
+        app.state.model_router = intelligence_router
+        app.state.model_router_diagnostics = diagnostics
+    except Exception:
+        app.state.model_router = intelligence_router
+        app.state.model_router_diagnostics = {"tier": "low", "error": "router_diagnostics_failed"}
 
     yield
 
