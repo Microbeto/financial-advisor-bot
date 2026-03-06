@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Holding, PortfolioSnapshot } from "@/lib/types";
-import { getMarketHistory, getPortfolio, mlPredict, savePortfolio } from "@/lib/api-client";
+import type { Holding, PortfolioSnapshot, Recommendation } from "@/lib/types";
+import { getMarketHistory, getPortfolio, getRecommendations, mlPredict, savePortfolio } from "@/lib/api-client";
 import { RequireAuth } from "@/components/require-auth";
 import { useAuth } from "@/lib/auth-context";
 
@@ -59,6 +59,9 @@ export default function PortfolioPage() {
   const { role } = useAuth();
   const [portfolio, setPortfolio] = useState<PortfolioSnapshot | null>(null);
   const [latestPrices, setLatestPrices] = useState<Record<string, number>>({});
+  const [advice, setAdvice] = useState<Recommendation[]>([]);
+  const [adviceLoading, setAdviceLoading] = useState(false);
+  const [adviceError, setAdviceError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [autofilling, setAutofilling] = useState(false);
@@ -285,6 +288,39 @@ export default function PortfolioPage() {
     };
   }, [portfolio?.holdings]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAdvice() {
+      if (!portfolio || !(portfolio.holdings ?? []).length) {
+        if (!cancelled) {
+          setAdvice([]);
+          setAdviceError(null);
+        }
+        return;
+      }
+
+      try {
+        setAdviceLoading(true);
+        setAdviceError(null);
+        const recs = await getRecommendations(portfolio);
+        if (!cancelled) setAdvice(recs || []);
+      } catch {
+        if (!cancelled) {
+          setAdvice([]);
+          setAdviceError("Live ML advice is unavailable for this account role right now.");
+        }
+      } finally {
+        if (!cancelled) setAdviceLoading(false);
+      }
+    }
+
+    loadAdvice();
+    return () => {
+      cancelled = true;
+    };
+  }, [portfolio]);
+
   function updateHolding(index: number, field: keyof Holding, value: string) {
     if (!portfolio) return;
 
@@ -355,9 +391,64 @@ export default function PortfolioPage() {
     const px = live > 0 ? live : avg;
     return acc + qty * px;
   }, 0);
+  const totalCostBasis = (portfolio?.holdings ?? []).reduce((acc, h) => {
+    const qty = Number(h.quantity) || 0;
+    const avg = Number(h.avg_price) || 0;
+    return acc + qty * avg;
+  }, 0);
+  const unrealizedPnl = totalInvested - totalCostBasis;
+  const unrealizedReturnPct = totalCostBasis > 0 ? (unrealizedPnl / totalCostBasis) * 100 : 0;
   const cash = Number(portfolio?.cash ?? 0);
   const totalValue = totalInvested + cash;
   const canViewAdvanced = role === "premium" || role === "admin" || role === "manager";
+
+  const positionRows = (portfolio?.holdings ?? []).map((h) => {
+    const qty = Number(h.quantity) || 0;
+    const avg = Number(h.avg_price) || 0;
+    const sym = String(h.symbol || "").trim().toUpperCase();
+    const live = Number(latestPrices[sym] || 0);
+    const px = live > 0 ? live : avg;
+    const marketValue = qty * px;
+    const costValue = qty * avg;
+    const pnl = marketValue - costValue;
+    return {
+      symbol: sym,
+      marketValue,
+      costValue,
+      pnl,
+      weight: totalInvested > 0 ? marketValue / totalInvested : 0,
+    };
+  });
+
+  const maxWeight = positionRows.length ? Math.max(...positionRows.map((x) => x.weight)) : 0;
+  const cashRatio = totalValue > 0 ? cash / totalValue : 0;
+  const effectiveN = (() => {
+    const sumSq = positionRows.reduce((acc, x) => acc + x.weight * x.weight, 0);
+    if (sumSq <= 1e-9) return 0;
+    return 1 / sumSq;
+  })();
+
+  const gainers = positionRows.filter((x) => x.pnl > 0).length;
+  const losers = positionRows.filter((x) => x.pnl < 0).length;
+
+  const adviceMap = new Map(advice.map((r) => [String(r.symbol || "").toUpperCase(), r]));
+  const sellSignals = advice.filter((x) => x.action === "SELL").length;
+  const holdSignals = advice.filter((x) => x.action === "HOLD").length;
+  const buySignals = advice.filter((x) => x.action === "BUY").length;
+
+  const riskFlags: string[] = [];
+  if (maxWeight > 0.25) {
+    riskFlags.push("Single-name concentration is high (>25%). Trim the largest position.");
+  }
+  if (cashRatio < 0.05) {
+    riskFlags.push("Cash buffer is low (<5%). Keep some dry powder for volatility spikes.");
+  }
+  if ((portfolio?.holdings ?? []).length < 5) {
+    riskFlags.push("Diversification is limited (<5 holdings). Add uncorrelated names.");
+  }
+  if (sellSignals >= 3) {
+    riskFlags.push("ML engine is flagging multiple SELL signals. Consider de-risking weakest names.");
+  }
 
   return (
     <RequireAuth>
@@ -386,6 +477,71 @@ export default function PortfolioPage() {
             <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
               <div className="text-[10px] uppercase tracking-wide text-slate-400">Cash reserve</div>
               <div className="mt-1 text-lg font-semibold text-emerald-300">${cash.toFixed(2)}</div>
+            </div>
+          </section>
+        )}
+
+        {portfolio && (
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+              <div className="text-[10px] uppercase tracking-wide text-slate-400">Unrealized P/L</div>
+              <div className={["mt-1 text-lg font-semibold", unrealizedPnl >= 0 ? "text-emerald-300" : "text-rose-300"].join(" ")}>
+                {unrealizedPnl >= 0 ? "+" : ""}${unrealizedPnl.toFixed(2)}
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+              <div className="text-[10px] uppercase tracking-wide text-slate-400">Return on advice baseline</div>
+              <div className={["mt-1 text-lg font-semibold", unrealizedReturnPct >= 0 ? "text-emerald-300" : "text-rose-300"].join(" ")}>
+                {unrealizedReturnPct >= 0 ? "+" : ""}{unrealizedReturnPct.toFixed(2)}%
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+              <div className="text-[10px] uppercase tracking-wide text-slate-400">Winners / Losers</div>
+              <div className="mt-1 text-lg font-semibold text-slate-100">{gainers} / {losers}</div>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+              <div className="text-[10px] uppercase tracking-wide text-slate-400">Diversification score</div>
+              <div className="mt-1 text-lg font-semibold text-slate-100">{effectiveN.toFixed(1)}</div>
+            </div>
+          </section>
+        )}
+
+        {portfolio && (
+          <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-sm">
+            <h2 className="text-sm font-semibold text-slate-100">Risk management outlook</h2>
+            <p className="mt-1 text-xs text-slate-300">
+              This combines concentration, liquidity buffer, diversification, and live ML advice to help manage oncoming risk.
+            </p>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+                <div className="text-[10px] uppercase tracking-wide text-slate-400">Largest position weight</div>
+                <div className="mt-1 text-sm font-semibold text-slate-100">{(maxWeight * 100).toFixed(1)}%</div>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+                <div className="text-[10px] uppercase tracking-wide text-slate-400">Cash buffer</div>
+                <div className="mt-1 text-sm font-semibold text-slate-100">{(cashRatio * 100).toFixed(1)}%</div>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+                <div className="text-[10px] uppercase tracking-wide text-slate-400">ML advice mix</div>
+                <div className="mt-1 text-sm font-semibold text-slate-100">BUY {buySignals} / HOLD {holdSignals} / SELL {sellSignals}</div>
+              </div>
+            </div>
+
+            <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs">
+              {adviceLoading ? (
+                <div className="text-slate-300">Loading live ML advice…</div>
+              ) : adviceError ? (
+                <div className="text-amber-300">{adviceError}</div>
+              ) : riskFlags.length ? (
+                <ul className="space-y-1 text-slate-200">
+                  {riskFlags.map((f) => (
+                    <li key={f}>{f}</li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-emerald-300">No immediate structural risk flags from current portfolio metrics.</div>
+              )}
             </div>
           </section>
         )}
@@ -464,6 +620,7 @@ export default function PortfolioPage() {
                         <th className="px-2 py-1">Avg Price</th>
                         <th className="px-2 py-1">Market Value</th>
                         {canViewAdvanced && <th className="px-2 py-1">Allocation</th>}
+                        <th className="px-2 py-1">Advice</th>
                         <th className="px-2 py-1"></th>
                       </tr>
                     </thead>
@@ -477,6 +634,8 @@ export default function PortfolioPage() {
                         const priceForValue = live > 0 ? live : avg;
                         const value = qty * priceForValue;
                         const allocationPct = totalValue > 0 ? (value / totalValue) * 100 : 0;
+                        const adviceItem = adviceMap.get(sym);
+                        const adviceAction = adviceItem?.action ?? "HOLD";
                         return (
                         <tr key={idx} className="border-b border-slate-900 hover:bg-slate-950/60">
                           <td className="px-2 py-1">
@@ -538,6 +697,21 @@ export default function PortfolioPage() {
                             </td>
                           )}
 
+                          <td className="px-2 py-1">
+                            <span
+                              className={[
+                                "inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium",
+                                adviceAction === "BUY"
+                                  ? "border-emerald-500/50 bg-emerald-900/30 text-emerald-200"
+                                  : adviceAction === "SELL"
+                                    ? "border-rose-500/50 bg-rose-900/30 text-rose-200"
+                                    : "border-slate-600 bg-slate-800 text-slate-300",
+                              ].join(" ")}
+                            >
+                              {adviceAction}
+                            </span>
+                          </td>
+
                           <td className="px-2 py-1 text-right">
                             <button
                               type="button"
@@ -553,7 +727,7 @@ export default function PortfolioPage() {
                       {portfolio.holdings.length === 0 && (
                         <tr>
                           <td
-                            colSpan={canViewAdvanced ? 6 : 5}
+                            colSpan={canViewAdvanced ? 7 : 6}
                             className="px-2 py-2 text-center text-[11px] text-slate-500"
                           >
                             No holdings. Add at least one row or keep only cash.
