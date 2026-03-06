@@ -74,6 +74,24 @@ MACRO_TERMS: Tuple[str, ...] = (
     "federal reserve",
 )
 
+BASE_FEATURE_NAMES: Tuple[str, ...] = (
+    "ret_1d",
+    "ret_5d",
+    "ret_20d",
+    "vol_20d",
+    "momentum_blend",
+    "symbol_sentiment",
+    "market_sentiment",
+    "macro_rate_cuts",
+    "macro_inflation",
+    "macro_recession",
+    "macro_volatility",
+    "macro_risk_on",
+    "macro_risk_off",
+    "macro_yield",
+    "macro_federal_reserve",
+)
+
 
 def _ml_log(message: str) -> None:
     enabled = os.getenv("ML_PIPELINE_VERBOSE", "1").strip().lower() not in ("0", "false", "no", "off")
@@ -702,6 +720,107 @@ def get_tournament_competitor_stats(model_id: Optional[str] = None) -> Dict[str,
         "algorithm": algorithm,
         "winner_name": winner_name,
         "competitor_stats": stats,
+    }
+
+
+def get_model_feature_importances(model_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Returns feature importances for the selected/latest model.
+    For tournament models, this attempts to extract importances from the winner model.
+    """
+    doc = _selected_or_latest_model(model_id)
+    if not doc:
+        return {
+            "model_id": model_id,
+            "winner_name": None,
+            "feature_labels": [],
+            "feature_importances": [],
+        }
+
+    resolved_model_id = str(doc.get("model_id") or (model_id or "")) or None
+    algorithm = str(doc.get("algorithm") or "")
+
+    try:
+        model_obj = _load_model(doc)
+    except Exception:
+        return {
+            "model_id": resolved_model_id,
+            "winner_name": None,
+            "feature_labels": [],
+            "feature_importances": [],
+        }
+
+    # Tree-based single-model path (random_forest/boosting/xgboost/lightgbm etc).
+    if hasattr(model_obj, "feature_importances_"):
+        vals = np.asarray(getattr(model_obj, "feature_importances_"), dtype=float).reshape(-1)
+        labels = list(BASE_FEATURE_NAMES[: len(vals)])
+        if len(labels) < len(vals):
+            labels.extend([f"feature_{i}" for i in range(len(labels), len(vals))])
+        return {
+            "model_id": resolved_model_id,
+            "winner_name": None,
+            "feature_labels": labels,
+            "feature_importances": [float(x) for x in vals.tolist()],
+        }
+
+    # Tournament bundle path.
+    if algorithm == "multi_armed_tournament" and isinstance(model_obj, dict):
+        winner_name = str(model_obj.get("winner_name") or "") or None
+        winner_model = model_obj.get("winner_model")
+        base_names = [str(x) for x in (model_obj.get("base_model_names") or []) if str(x)]
+
+        # MetaLabeler winner: average importances across per-base RF models.
+        models = getattr(winner_model, "_models", None)
+        if isinstance(models, list) and models:
+            rows: List[np.ndarray] = []
+            for m in models:
+                if hasattr(m, "feature_importances_"):
+                    arr = np.asarray(getattr(m, "feature_importances_"), dtype=float).reshape(-1)
+                    rows.append(arr)
+
+            if rows:
+                min_len = min(int(r.shape[0]) for r in rows)
+                mat = np.vstack([r[:min_len] for r in rows])
+                vals = np.mean(mat, axis=0)
+
+                n_base = min(len(base_names), int(vals.shape[0]))
+                labels = [f"base_pred_{name}" for name in base_names[:n_base]]
+                rem = int(vals.shape[0]) - n_base
+                if rem > 0:
+                    labels.extend(list(BASE_FEATURE_NAMES[:rem]))
+                if len(labels) < int(vals.shape[0]):
+                    labels.extend([f"feature_{i}" for i in range(len(labels), int(vals.shape[0]))])
+
+                return {
+                    "model_id": resolved_model_id,
+                    "winner_name": winner_name,
+                    "feature_labels": labels,
+                    "feature_importances": [float(x) for x in vals.tolist()],
+                }
+
+        # Fallback if winner itself exposes importances.
+        if hasattr(winner_model, "feature_importances_"):
+            vals = np.asarray(getattr(winner_model, "feature_importances_"), dtype=float).reshape(-1)
+            labels = [f"feature_{i}" for i in range(int(vals.shape[0]))]
+            return {
+                "model_id": resolved_model_id,
+                "winner_name": winner_name,
+                "feature_labels": labels,
+                "feature_importances": [float(x) for x in vals.tolist()],
+            }
+
+        return {
+            "model_id": resolved_model_id,
+            "winner_name": winner_name,
+            "feature_labels": [],
+            "feature_importances": [],
+        }
+
+    return {
+        "model_id": resolved_model_id,
+        "winner_name": None,
+        "feature_labels": [],
+        "feature_importances": [],
     }
 
 

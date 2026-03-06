@@ -68,6 +68,7 @@ from .services.users import delete_user, list_users, update_user_role
 from .services.ml_workflow import (
     deploy_neural_network,
     ensure_selected_model_exists,
+    get_model_feature_importances,
     list_models,
     predict_for_basket,
     prune_underperforming_models,
@@ -632,6 +633,8 @@ def create_app() -> FastAPI:
         if not news:
             news = await _maybe_await(refresh_top_news_of_day, today)
 
+        fi = get_model_feature_importances(model_id=None)
+
         return SignalsToday(
             date=today,
             top_up=top_up_items,
@@ -639,6 +642,10 @@ def create_app() -> FastAPI:
             news=news or [],
             universe=[],
             regime=dash.regime,
+            ml_model_id=fi.get("model_id"),
+            ml_winner_name=fi.get("winner_name"),
+            ml_feature_labels=list(fi.get("feature_labels") or []),
+            ml_feature_importances=[float(x) for x in (fi.get("feature_importances") or [])],
         )
 
     @app.get("/market/annotated/{symbol}", response_model=AnnotatedHistoryResponse)

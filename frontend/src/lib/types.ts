@@ -143,6 +143,10 @@ export interface DailySignals {
   news: NewsItem[];
   universe: string[];
   regime?: string | null;
+  ml_model_id?: string | null;
+  ml_winner_name?: string | null;
+  ml_feature_labels?: string[];
+  ml_feature_importances?: number[];
 
   [k: string]: unknown;
 }

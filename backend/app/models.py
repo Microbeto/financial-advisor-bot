@@ -194,6 +194,10 @@ class SignalsToday(BaseModel):
     news: List[NewsItem] = Field(default_factory=list)
     universe: List[str] = Field(default_factory=list)
     regime: Regime = "neutral"
+    ml_model_id: Optional[str] = None
+    ml_winner_name: Optional[str] = None
+    ml_feature_labels: List[str] = Field(default_factory=list)
+    ml_feature_importances: List[float] = Field(default_factory=list)
 
 
 class MarketBar(BaseModel):

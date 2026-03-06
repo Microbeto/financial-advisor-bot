@@ -349,6 +349,62 @@ function NewsCard({ item }: { item: NewsItem }) {
   );
 }
 
+function FeatureImportanceChart({
+  labels,
+  values,
+}: {
+  labels: string[];
+  values: number[];
+}) {
+  function barWidthClass(pct: number): string {
+    if (pct <= 5) return "w-1/12";
+    if (pct <= 15) return "w-2/12";
+    if (pct <= 25) return "w-3/12";
+    if (pct <= 35) return "w-4/12";
+    if (pct <= 45) return "w-5/12";
+    if (pct <= 55) return "w-6/12";
+    if (pct <= 65) return "w-7/12";
+    if (pct <= 75) return "w-8/12";
+    if (pct <= 85) return "w-9/12";
+    if (pct <= 95) return "w-10/12";
+    return "w-full";
+  }
+
+  if (!labels.length || !values.length || labels.length !== values.length) {
+    return (
+      <div className="text-sm text-slate-300">
+        Feature importances are not available for the currently selected model.
+      </div>
+    );
+  }
+
+  const pairs = labels.map((label, i) => ({ label, value: Number(values[i] ?? 0) }));
+  pairs.sort((a, b) => b.value - a.value);
+  const top = pairs.slice(0, 12);
+  const maxVal = Math.max(1e-9, ...top.map((x) => x.value));
+
+  return (
+    <div className="space-y-2">
+      {top.map((item) => {
+        const widthPct = Math.max(2, Math.min(100, (item.value / maxVal) * 100));
+        return (
+          <div key={item.label} className="space-y-1">
+            <div className="flex items-center justify-between gap-3 text-xs text-slate-300">
+              <span className="truncate">{item.label}</span>
+              <span className="font-mono text-slate-200">{item.value.toFixed(4)}</span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
+              <div
+                className={["h-full rounded-full bg-cyan-500", barWidthClass(widthPct)].join(" ")}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -431,6 +487,14 @@ export default function DashboardPage() {
   const down = signals?.top_down ?? [];
   const news = signals?.news ?? [];
   const regime = typeof signals?.regime === "string" ? signals?.regime : null;
+  const mlModelId = typeof signals?.ml_model_id === "string" ? signals.ml_model_id : null;
+  const mlWinner = typeof signals?.ml_winner_name === "string" ? signals.ml_winner_name : null;
+  const mlLabels = Array.isArray(signals?.ml_feature_labels)
+    ? (signals?.ml_feature_labels as string[])
+    : [];
+  const mlImportances = Array.isArray(signals?.ml_feature_importances)
+    ? (signals?.ml_feature_importances as number[])
+    : [];
 
   return (
     <div className="space-y-6">
@@ -520,6 +584,30 @@ export default function DashboardPage() {
           ) : (
             <div className="text-sm text-slate-300">No news items.</div>
           )}
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-800 bg-slate-950/30 p-4">
+        <h2 className="text-sm font-semibold text-slate-100">ML feature importance</h2>
+        <p className="mt-1 text-xs text-slate-300">
+          Visual explanation of which features mattered most for the currently selected model.
+        </p>
+
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-300">
+          {mlModelId ? (
+            <div>
+              Model: <span className="font-mono text-slate-200">{mlModelId}</span>
+            </div>
+          ) : null}
+          {mlWinner ? (
+            <div>
+              Tournament winner: <span className="text-slate-200">{mlWinner}</span>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-3">
+          <FeatureImportanceChart labels={mlLabels} values={mlImportances} />
         </div>
       </section>
 
