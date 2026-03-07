@@ -421,6 +421,29 @@ export default function AdminPage() {
   }
 
   const selectedCount = basket.size;
+  const routerStatus = (routerDiagnostics || {}) as Record<string, unknown>;
+  const statusCapability =
+    String(routerStatus.system_capability || "low").toLowerCase() === "high" ||
+    String(routerStatus.system_capability || "low").toLowerCase() === "medium" ||
+    String(routerStatus.system_capability || "low").toLowerCase() === "low"
+      ? String(routerStatus.system_capability || "low").toLowerCase()
+      : "low";
+  const statusPipeline = String(routerStatus.sentiment_pipeline || "lexicon");
+  const statusCheckedAt = String(routerStatus.checked_at || "-");
+  const nestedDiagnostics = (routerStatus.diagnostics || {}) as Record<string, unknown>;
+  const ollamaActive = Boolean(nestedDiagnostics.ollama_active);
+  const gpuActive = Boolean(nestedDiagnostics.gpu);
+  const ramAvailable =
+    typeof nestedDiagnostics.ram_available_gb === "number"
+      ? Number(nestedDiagnostics.ram_available_gb).toFixed(2)
+      : "-";
+
+  const capClass =
+    statusCapability === "high"
+      ? "border-emerald-700 bg-emerald-900/40 text-emerald-200"
+      : statusCapability === "medium"
+      ? "border-amber-700 bg-amber-900/40 text-amber-200"
+      : "border-rose-700 bg-rose-900/40 text-rose-200";
 
   return (
     <div className="space-y-5">
@@ -430,6 +453,40 @@ export default function AdminPage() {
           Central place to manage users, machine-learning runtime configuration,
           policy constraints, and operational site/database actions.
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
+          <span className={["rounded-full border px-2 py-1 font-medium", capClass].join(" ")}>
+            Capability: {statusCapability}
+          </span>
+          <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-1 text-slate-200">
+            Pipeline: {statusPipeline}
+          </span>
+          <span
+            className={[
+              "rounded-full border px-2 py-1",
+              ollamaActive
+                ? "border-emerald-700 bg-emerald-900/30 text-emerald-200"
+                : "border-slate-700 bg-slate-900/70 text-slate-300",
+            ].join(" ")}
+          >
+            Ollama: {ollamaActive ? "online" : "offline"}
+          </span>
+          <span
+            className={[
+              "rounded-full border px-2 py-1",
+              gpuActive
+                ? "border-cyan-700 bg-cyan-900/30 text-cyan-200"
+                : "border-slate-700 bg-slate-900/70 text-slate-300",
+            ].join(" ")}
+          >
+            GPU: {gpuActive ? "yes" : "no"}
+          </span>
+          <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-1 text-slate-300">
+            RAM avail: {ramAvailable} GB
+          </span>
+          <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-1 text-slate-400">
+            Checked: {statusCheckedAt}
+          </span>
+        </div>
       </div>
 
       {error && (
