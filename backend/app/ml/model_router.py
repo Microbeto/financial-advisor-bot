@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 from typing import Any, Dict, Literal
 
 import httpx
@@ -53,12 +54,31 @@ class IntelligenceRouter:
             return (0.0, 0.0)
 
     def _read_gpu_available(self) -> bool:
-        if not TORCH_AVAILABLE or torch is None:
-            return False
+        # Primary path: torch CUDA visibility.
+        if TORCH_AVAILABLE and torch is not None:
+            try:
+                if bool(torch.cuda.is_available()):
+                    return True
+            except Exception:
+                pass
+
+        # Fallback path: detect NVIDIA GPU presence directly via nvidia-smi.
+        # This covers environments with CPU-only torch builds (+cpu wheels).
         try:
-            return bool(torch.cuda.is_available())
+            proc = subprocess.run(
+                ["nvidia-smi", "-L"],
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+            )
+            out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+            if proc.returncode == 0 and "GPU" in out:
+                return True
         except Exception:
-            return False
+            pass
+
+        return False
 
     async def _ping_ollama(self) -> bool:
         try:
