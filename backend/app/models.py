@@ -194,6 +194,9 @@ class SignalsToday(BaseModel):
     news: List[NewsItem] = Field(default_factory=list)
     universe: List[str] = Field(default_factory=list)
     regime: Regime = "neutral"
+    system_capability: Literal["low", "medium", "high"] = "low"
+    llm_summary_enabled: bool = False
+    market_summary: Optional[str] = None
     ml_model_id: Optional[str] = None
     ml_winner_name: Optional[str] = None
     ml_feature_labels: List[str] = Field(default_factory=list)
@@ -270,6 +273,9 @@ class DashboardResponse(BaseModel):
     dow_up: List[TrendItem] = Field(default_factory=list)
     dow_down: List[TrendItem] = Field(default_factory=list)
     top_news: List[NewsItem] = Field(default_factory=list)
+    system_capability: Literal["low", "medium", "high"] = "low"
+    llm_summary_enabled: bool = False
+    market_summary: Optional[str] = None
     glossary: Dict[str, str] = Field(default_factory=dict)
 
 

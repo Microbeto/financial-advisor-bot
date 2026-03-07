@@ -11,6 +11,7 @@ from app.services.ml_workflow import (
     select_best_models,
     train_models_async,
 )
+from app.ml.model_router import intelligence_router
 from app.services.signals import generate_daily_signals
 
 
@@ -75,6 +76,11 @@ def run_daily() -> None:
     Always refresh dashboard signals.
     Optionally run ML workflow when ENABLE_ML_DAILY=1.
     """
+    try:
+        asyncio.run(intelligence_router.run_diagnostics())
+    except Exception:
+        pass
+
     generate_daily_signals()
 
     if _env_true("ENABLE_ML_DAILY", "0"):

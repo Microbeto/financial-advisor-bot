@@ -143,6 +143,9 @@ export interface DailySignals {
   news: NewsItem[];
   universe: string[];
   regime?: string | null;
+  system_capability?: "low" | "medium" | "high";
+  llm_summary_enabled?: boolean;
+  market_summary?: string | null;
   ml_model_id?: string | null;
   ml_winner_name?: string | null;
   ml_feature_labels?: string[];
@@ -183,6 +186,9 @@ export interface DashboardResponse {
   dow_down: DashboardSignalItem[];
 
   top_news: NewsItem[];
+  system_capability?: "low" | "medium" | "high";
+  llm_summary_enabled?: boolean;
+  market_summary?: string | null;
   glossary: GlossaryTerms;
 
   [k: string]: unknown;

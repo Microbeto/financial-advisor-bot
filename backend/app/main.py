@@ -189,9 +189,11 @@ async def lifespan(app: FastAPI):
         diagnostics = await intelligence_router.run_diagnostics()
         app.state.model_router = intelligence_router
         app.state.model_router_diagnostics = diagnostics
+        app.state.system_capability = diagnostics.get("tier", "low")
     except Exception:
         app.state.model_router = intelligence_router
         app.state.model_router_diagnostics = {"tier": "low", "error": "router_diagnostics_failed"}
+        app.state.system_capability = "low"
 
     yield
 
@@ -663,6 +665,9 @@ def create_app() -> FastAPI:
             news=news or [],
             universe=[],
             regime=dash.regime,
+            system_capability=str(getattr(dash, "system_capability", "low") or "low"),  # type: ignore[arg-type]
+            llm_summary_enabled=bool(getattr(dash, "llm_summary_enabled", False)),
+            market_summary=getattr(dash, "market_summary", None),
             ml_model_id=fi.get("model_id"),
             ml_winner_name=fi.get("winner_name"),
             ml_feature_labels=list(fi.get("feature_labels") or []),

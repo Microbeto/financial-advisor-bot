@@ -487,6 +487,14 @@ export default function DashboardPage() {
   const down = signals?.top_down ?? [];
   const news = signals?.news ?? [];
   const regime = typeof signals?.regime === "string" ? signals?.regime : null;
+  const systemCapability =
+    signals?.system_capability === "high" ||
+    signals?.system_capability === "medium" ||
+    signals?.system_capability === "low"
+      ? signals.system_capability
+      : "low";
+  const llmSummaryEnabled = Boolean(signals?.llm_summary_enabled);
+  const marketSummary = typeof signals?.market_summary === "string" ? signals.market_summary.trim() : "";
   const mlModelId = typeof signals?.ml_model_id === "string" ? signals.ml_model_id : null;
   const mlWinner = typeof signals?.ml_winner_name === "string" ? signals.ml_winner_name : null;
   const mlLabels = Array.isArray(signals?.ml_feature_labels)
@@ -569,6 +577,26 @@ export default function DashboardPage() {
           </div>
         </section>
       </div>
+
+      <section className="rounded-2xl border border-slate-800 bg-slate-950/30 p-4">
+        <h2 className="text-sm font-semibold text-slate-100">Market regime summary</h2>
+        <p className="mt-1 text-xs text-slate-300">
+          Capability-aware LLM narration. High-tier systems generate this from today&apos;s headlines; lower tiers skip it.
+        </p>
+
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-300">
+          <div>
+            Router tier: <span className="text-slate-200">{systemCapability}</span>
+          </div>
+          <div>
+            LLM enabled: <span className="text-slate-200">{llmSummaryEnabled ? "yes" : "no"}</span>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-3 text-sm leading-relaxed text-slate-200">
+          {loading ? "Loading..." : marketSummary || "Summary not generated for this capability tier."}
+        </div>
+      </section>
 
       <section className="rounded-2xl border border-slate-800 bg-slate-950/30 p-4">
         <h2 className="text-sm font-semibold text-slate-100">Financial news snapshot</h2>

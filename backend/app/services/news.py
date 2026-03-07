@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 from .. import db
 from ..models import NewsItem
 from ..engine.glossary import update_glossary_from_news_summaries
+from ..ml.model_router import intelligence_router
 
 try:
     import httpx
@@ -98,7 +99,7 @@ def _three_line_summary(text: str) -> str:
     return ". ".join(parts[:3]) + "."
 
 
-def _score_title(title: str) -> float:
+def _score_title_lexicon(title: str) -> float:
     t = (title or "").lower()
     score = 0.0
     for w in _POSITIVE:
@@ -108,6 +109,38 @@ def _score_title(title: str) -> float:
         if w in t:
             score -= 1.0
     return score
+
+
+def _score_title_keyword_intensity(title: str) -> float:
+    """
+    Lighter-weight fallback for very constrained environments.
+    """
+    t = (title or "").lower()
+    score = 0.0
+    score += 0.6 * sum(1.0 for w in _POSITIVE if w in t)
+    score -= 0.6 * sum(1.0 for w in _NEGATIVE if w in t)
+    return float(score)
+
+
+def _sentiment_pipeline_name() -> str:
+    try:
+        return str(intelligence_router.get_sentiment_pipeline() or "lexicon").strip().lower()
+    except Exception:
+        return "lexicon"
+
+
+def _score_title(title: str) -> float:
+    """
+    Sentiment routing entrypoint. Keeps news scoring decoupled from a single hardcoded method.
+    """
+    pipeline = _sentiment_pipeline_name()
+    if pipeline == "finbert":
+        # Until FinBERT inference is wired for article-level scoring in this service,
+        # use the lexicon proxy and keep routing explicit through the router.
+        return _score_title_lexicon(title)
+    if pipeline in ("lexicon", "tfidf"):
+        return _score_title_lexicon(title)
+    return _score_title_keyword_intensity(title)
 
 
 def _parse_dt(s: str) -> Optional[datetime]:

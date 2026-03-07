@@ -9,6 +9,8 @@ from .. import db
 from ..models import DashboardResponse, NewsItem, Regime, RiskProfile, TrendItem
 from ..core.utils import iso_date_utc
 from ..engine.glossary import lingo_glossary
+from ..engine.llm_service import GenerativeIntelligence
+from ..ml.model_router import intelligence_router
 from .news import refresh_top_news_of_day, get_news_for_date
 from .symbols import resolve_symbol_name
 from .universe import get_universe_for_date, get_user_custom_universe, save_universe_for_date
@@ -40,12 +42,63 @@ NEWS_WEIGHT = float(os.getenv("DASH_NEWS_WEIGHT", "0.10"))
 
 DASH_CACHE_TTL_SEC = int(os.getenv("DASH_CACHE_TTL_SEC", "900"))
 SIGNALS_CACHE_TTL_SEC = int(os.getenv("SIGNALS_CACHE_TTL_SEC", "86400"))
+LLM_SUMMARY_TIMEOUT_SEC = float(os.getenv("LLM_SUMMARY_TIMEOUT_SEC", "8.0"))
+LLM_SUMMARY_HEADLINE_LIMIT = int(os.getenv("LLM_SUMMARY_HEADLINE_LIMIT", "12"))
+
+_gen_ai = GenerativeIntelligence()
 
 
 async def _maybe_await(res: Any) -> Any:
     if asyncio.iscoroutine(res):
         return await res
     return res
+
+
+def _system_capability() -> str:
+    cap = str(getattr(intelligence_router, "system_capability", "low") or "low").strip().lower()
+    if cap not in ("low", "medium", "high"):
+        return "low"
+    return cap
+
+
+def _headline_list(news_items: List[Any]) -> List[str]:
+    out: List[str] = []
+    for item in news_items or []:
+        title = ""
+        if isinstance(item, dict):
+            title = str(item.get("title") or "").strip()
+        else:
+            title = str(getattr(item, "title", "") or "").strip()
+        if not title:
+            continue
+        out.append(title)
+        if len(out) >= max(1, int(LLM_SUMMARY_HEADLINE_LIMIT)):
+            break
+    return out
+
+
+async def _generate_market_summary_if_enabled(news_items: List[Any], capability: str) -> str | None:
+    if capability != "high":
+        return None
+
+    if not bool(getattr(intelligence_router, "ollama_available", False)):
+        return None
+
+    headlines = _headline_list(news_items)
+    if not headlines:
+        return None
+
+    try:
+        if not await _gen_ai.check_health():
+            return None
+        text = await asyncio.wait_for(
+            _gen_ai.generate_market_summary(headlines),
+            timeout=max(1.0, float(LLM_SUMMARY_TIMEOUT_SEC)),
+        )
+        cleaned = str(text or "").strip()
+        return cleaned or None
+    except Exception:
+        return None
 
 
 def _utc_iso_z(dt: datetime) -> str:
@@ -284,6 +337,8 @@ async def _fill_names_for_items(items: List[TrendItem]) -> None:
 
 async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
     today = iso_date_utc()
+    capability = _system_capability()
+    llm_summary_enabled = capability == "high"
 
     dash_col = db.require_col(db.dashboard_cache_col, "dashboard_cache")
     cached = dash_col.find_one({"user_id": user_id, "date": today})
@@ -291,6 +346,15 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
         cached.pop("_id", None)
         cached.pop("user_id", None)
         if _is_doc_fresh(cached, DASH_CACHE_TTL_SEC):
+            cached["system_capability"] = capability
+            cached["llm_summary_enabled"] = llm_summary_enabled
+            if llm_summary_enabled and not cached.get("market_summary"):
+                cached_summary = await _generate_market_summary_if_enabled(cached.get("top_news") or [], capability)
+                if cached_summary:
+                    cached["market_summary"] = cached_summary
+                    payload = dict(cached)
+                    payload["cached_at"] = _utc_iso_z(datetime.now(timezone.utc))
+                    _safe_cache_upsert(dash_col, user_id=user_id, date=today, payload=payload)
             return DashboardResponse(**cached)
 
     role = "user" if user_id == "public" else str(get_user_role(user_id))
@@ -308,6 +372,10 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
         if top_news is None:
             top_news = await _maybe_await(refresh_top_news_of_day(today)) or []
 
+        market_summary = str(sig.get("market_summary") or "").strip() or None
+        if llm_summary_enabled and not market_summary:
+            market_summary = await _generate_market_summary_if_enabled(top_news or [], capability)
+
         resp = DashboardResponse(
             date=today,
             regime=str(sig.get("regime") or "neutral"),  # type: ignore
@@ -316,6 +384,9 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
             dow_up=[TrendItem(**x) for x in (sig.get("dow_up") or [])],
             dow_down=[TrendItem(**x) for x in (sig.get("dow_down") or [])],
             top_news=[NewsItem(**x) for x in (top_news or [])],
+            system_capability=capability,  # type: ignore[arg-type]
+            llm_summary_enabled=llm_summary_enabled,
+            market_summary=market_summary,
             glossary=lingo_glossary(),
         )
 
@@ -380,6 +451,8 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
     if top_news is None:
         top_news = []
 
+    market_summary = await _generate_market_summary_if_enabled(top_news, capability) if llm_summary_enabled else None
+
     signals_payload: Dict[str, Any] = {
         "date": today,
         "regime": regime,
@@ -388,6 +461,9 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
         "dow_up": [x.model_dump() for x in dw_up],
         "dow_down": [x.model_dump() for x in dw_down],
         "top_news": [x.model_dump() for x in top_news],
+        "system_capability": capability,
+        "llm_summary_enabled": llm_summary_enabled,
+        "market_summary": market_summary,
         "cached_at": _utc_iso_z(datetime.now(timezone.utc)),
     }
     _write_cached_signals(user_id, today, signals_payload)
@@ -400,6 +476,9 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
         dow_up=dw_up,
         dow_down=dw_down,
         top_news=top_news,
+        system_capability=capability,  # type: ignore[arg-type]
+        llm_summary_enabled=llm_summary_enabled,
+        market_summary=market_summary,
         glossary=lingo_glossary(),
     )
 
