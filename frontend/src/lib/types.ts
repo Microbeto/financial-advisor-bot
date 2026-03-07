@@ -244,6 +244,7 @@ export interface MLModelInfo {
   is_selected?: boolean;
   is_deployed?: boolean;
   underperforming?: boolean;
+  news_coverage_ratio?: number | null;
 
   model_name?: string;
   model_type?: string;

@@ -305,6 +305,7 @@ export default function AuditLogPage() {
                     <th className="px-3 py-2">Rank</th>
                     <th className="px-3 py-2">Score</th>
                     <th className="px-3 py-2">F1</th>
+                    <th className="px-3 py-2">Data Completeness</th>
                     <th className="px-3 py-2">Selected</th>
                     <th className="px-3 py-2">Deployed</th>
                     <th className="px-3 py-2">Created</th>
@@ -318,6 +319,9 @@ export default function AuditLogPage() {
                       <td className="px-3 py-2 text-slate-300">{m.rank ?? "-"}</td>
                       <td className="px-3 py-2 text-slate-300">{asNum(Number(m.score ?? 0), 3)}</td>
                       <td className="px-3 py-2 text-slate-300">{asNum(Number(m.metrics?.f1 ?? 0), 3)}</td>
+                      <td className="px-3 py-2 text-slate-300">
+                        {m.news_coverage_ratio == null ? "-" : `${asNum(Number(m.news_coverage_ratio) * 100, 1)}%`}
+                      </td>
                       <td className="px-3 py-2 text-slate-300">{(m.is_selected ?? m.selected) ? "yes" : "no"}</td>
                       <td className="px-3 py-2 text-slate-300">{(m.is_deployed ?? m.deployed) ? "yes" : "no"}</td>
                       <td className="px-3 py-2 text-slate-400">{formatTime(String(m.created_at || ""))}</td>

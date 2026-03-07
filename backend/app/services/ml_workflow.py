@@ -835,6 +835,9 @@ def _doc_to_model_info(doc: Dict[str, Any]) -> MLModelInfo:
         is_selected=bool(doc.get("is_selected", False)),
         is_deployed=bool(doc.get("is_deployed", False)),
         underperforming=bool(doc.get("underperforming", False)),
+        news_coverage_ratio=(
+            float(doc.get("news_coverage_ratio")) if doc.get("news_coverage_ratio") is not None else None
+        ),
         created_at=doc.get("created_at"),
     )
 

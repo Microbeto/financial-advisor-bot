@@ -314,6 +314,7 @@ class MLModelInfo(BaseModel):
     is_selected: bool = False
     is_deployed: bool = False
     underperforming: bool = False
+    news_coverage_ratio: Optional[float] = None
     created_at: Optional[datetime] = None
 
 
