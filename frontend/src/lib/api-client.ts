@@ -19,6 +19,7 @@ import type {
   MLTournamentStatsResponse,
   AdminUserDetail,
   AccountStatus,
+  RouterDiagnosticsResponse,
 } from "./types";
 import { API_BASE_URL } from "./config";
 
@@ -556,6 +557,14 @@ export async function adminUpdateRateLimit(key: string, perMinute: number) {
     method: "PUT",
     body: { key, per_minute: perMinute },
     retry: { attempts: 1 },
+  });
+}
+
+export async function adminGetRouterDiagnostics(refresh = true) {
+  const qs = `?refresh=${encodeURIComponent(String(Boolean(refresh)))}`;
+  return request<RouterDiagnosticsResponse>(`/admin/intelligence/status${qs}`, {
+    retry: { attempts: 1 },
+    timeoutMs: 15000,
   });
 }
 

@@ -809,6 +809,42 @@ def create_app() -> FastAPI:
         require_roles(claims, ("admin",))
         return clear_cache(scope=scope, max_age_days=max_age_days, dry_run=dry_run)
 
+    @app.get("/admin/intelligence/status")
+    async def admin_intelligence_status(refresh: bool = True, authorization: str | None = Header(default=None)):
+        await _acquire_limit("api_ml_admin")
+        claims = _claims_required(authorization)
+        require_roles(claims, ("admin", "manager"))
+
+        diagnostics: dict[str, Any] = dict(getattr(app.state, "model_router_diagnostics", {}) or {})
+
+        if refresh:
+            try:
+                diagnostics = await intelligence_router.run_diagnostics()
+            except Exception:
+                diagnostics = {**diagnostics, "tier": "low", "error": "router_diagnostics_failed"}
+
+        tier = str(diagnostics.get("tier") or getattr(intelligence_router, "system_capability", "low") or "low").strip().lower()
+        if tier not in ("low", "medium", "high"):
+            tier = "low"
+
+        try:
+            sentiment_pipeline = str(intelligence_router.get_sentiment_pipeline() or "lexicon")
+        except Exception:
+            sentiment_pipeline = "lexicon"
+
+        app.state.model_router = intelligence_router
+        app.state.model_router_diagnostics = diagnostics
+        app.state.system_capability = tier
+
+        return {
+            "status": "ok",
+            "checked_at": _utc_iso_z(datetime.now(timezone.utc)),
+            "refresh": bool(refresh),
+            "system_capability": tier,
+            "sentiment_pipeline": sentiment_pipeline,
+            "diagnostics": diagnostics,
+        }
+
     @app.post("/admin/scheduler/run-daily")
     def admin_run_daily(authorization: str | None = Header(default=None)):
         _acquire_limit_sync("api_ml_admin")

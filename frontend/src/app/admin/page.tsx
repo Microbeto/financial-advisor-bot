@@ -8,6 +8,7 @@ import {
   adminDeleteUser,
   adminExportUser,
   adminGetCacheStats,
+  adminGetRouterDiagnostics,
   adminGetUserDetail,
   adminListUsers,
   adminPurgeUser,
@@ -66,6 +67,8 @@ export default function AdminPage() {
   const [mlError, setMlError] = useState<string | null>(null);
 
   const [cacheStats, setCacheStats] = useState<Record<string, unknown> | null>(null);
+  const [routerDiagnostics, setRouterDiagnostics] = useState<Record<string, unknown> | null>(null);
+  const [routerDiagLoading, setRouterDiagLoading] = useState(false);
   const [opsLoading, setOpsLoading] = useState(false);
   const [rateLimitKey, setRateLimitKey] = useState("api_read");
   const [rateLimitValue, setRateLimitValue] = useState(120);
@@ -103,6 +106,8 @@ export default function AdminPage() {
           adminGetCacheStats(),
         ]);
 
+        const routerDiag = await adminGetRouterDiagnostics(false);
+
         if (cancelled) return;
 
         const toCandidate = (it: SignalTopItem, action: "BUY" | "SELL"): Candidate => ({
@@ -123,6 +128,7 @@ export default function AdminPage() {
         setMlSettings(settings);
         setMlDraft(settings);
         setCacheStats(cache);
+        setRouterDiagnostics(routerDiag as unknown as Record<string, unknown>);
       } catch (err) {
         console.error(err);
         if (!cancelled) {
@@ -215,6 +221,20 @@ export default function AdminPage() {
       setCacheStats(data);
     } catch (err) {
       console.error(err);
+    }
+  }
+
+  async function refreshRouterDiagnostics(live = true) {
+    try {
+      setRouterDiagLoading(true);
+      const out = await adminGetRouterDiagnostics(live);
+      setRouterDiagnostics(out as unknown as Record<string, unknown>);
+      setMessage(live ? "Router diagnostics refreshed." : null);
+    } catch (err) {
+      console.error(err);
+      setError("Failed to load router diagnostics.");
+    } finally {
+      setRouterDiagLoading(false);
     }
   }
 
@@ -422,6 +442,23 @@ export default function AdminPage() {
           {message}
         </div>
       )}
+
+      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 text-xs">
+        <div className="mb-2 flex items-center justify-between">
+          <div className="text-[11px] text-slate-300">Intelligence Router Diagnostics</div>
+          <button
+            type="button"
+            onClick={() => refreshRouterDiagnostics(true)}
+            disabled={routerDiagLoading}
+            className="rounded border border-sky-700 bg-sky-900/30 px-2 py-1 text-[11px] text-sky-200 hover:bg-sky-900/50 disabled:opacity-60"
+          >
+            {routerDiagLoading ? "Refreshing..." : "Refresh live"}
+          </button>
+        </div>
+        <pre className="max-h-48 overflow-auto rounded border border-slate-800 bg-slate-950 p-2 text-[10px] text-slate-300">
+          {JSON.stringify(routerDiagnostics || {}, null, 2)}
+        </pre>
+      </div>
 
       <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 text-xs">
         <div className="mb-3 flex items-center justify-between">

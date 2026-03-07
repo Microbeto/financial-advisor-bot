@@ -194,6 +194,15 @@ export interface DashboardResponse {
   [k: string]: unknown;
 }
 
+export interface RouterDiagnosticsResponse {
+  status: "ok";
+  checked_at: string;
+  refresh: boolean;
+  system_capability: "low" | "medium" | "high";
+  sentiment_pipeline: string;
+  diagnostics: Record<string, unknown>;
+}
+
 /**
  * Market annotated history (backend: /market/annotated/{symbol})
  */
