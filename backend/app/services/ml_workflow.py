@@ -55,6 +55,8 @@ TRIPLE_BARRIER_HOLD_DAYS = int(os.getenv("ML_TIME_BARRIER_DAYS", "20"))
 FINBERT_MODEL_NAME = os.getenv("FINBERT_MODEL_NAME", "ProsusAI/finbert")
 FINBERT_BATCH_SIZE = int(os.getenv("FINBERT_BATCH_SIZE", "16"))
 FINBERT_RETRY_SECONDS = int(os.getenv("FINBERT_RETRY_SECONDS", "300"))
+ML_ENFORCE_NEWS_COVERAGE = os.getenv("ML_ENFORCE_NEWS_COVERAGE", "1").strip().lower() in ("1", "true", "yes", "on")
+ML_MAX_NEWS_MISSING_RATIO = float(os.getenv("ML_MAX_NEWS_MISSING_RATIO", "0.10"))
 
 
 def _finbert_candidates() -> List[str]:
@@ -80,6 +82,13 @@ _RUNTIME_SETTINGS_DEFAULTS: Dict[str, Any] = {
     "walk_forward_splits": int(WALK_FORWARD_SPLITS),
     "walk_forward_min_train": int(WALK_FORWARD_MIN_TRAIN),
 }
+
+
+class DataValidationError(RuntimeError):
+    def __init__(self, message: str, *, code: str = "data_validation_failed", details: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
 
 MACRO_TERMS: Tuple[str, ...] = (
     "rate cuts",
@@ -117,6 +126,26 @@ def _ml_log(message: str) -> None:
         return
     ts = _utc_now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[ml][{ts}] {message}", flush=True)
+
+
+def _alert_admin_ml_issue(message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    payload = details or {}
+    _ml_log(f"ADMIN ALERT: {message} | {payload}")
+    try:
+        col = db.require_col(db.audit_logs_col, "audit_logs")
+        col.insert_one(
+            {
+                "user_id": "system",
+                "level": "error",
+                "path": "/ml/train",
+                "method": "POST",
+                "message": str(message)[:1000],
+                "context": payload,
+                "created_at": _utc_now(),
+            }
+        )
+    except Exception:
+        return
 
 
 def _load_xgboost_classifier() -> Any:
@@ -354,6 +383,7 @@ class _DailyNewsFeatures:
     symbol_sentiment: Dict[str, float]
     market_sentiment: float
     macro_features: List[float]
+    news_item_count: int = 0
 
 
 def _macro_term_features(texts: Sequence[str]) -> List[float]:
@@ -403,7 +433,49 @@ def _daily_news_features(date: str, symbols: Sequence[str]) -> _DailyNewsFeature
             symbol_sent[sym] = market_sent
 
     macro = _macro_term_features(all_texts)
-    return _DailyNewsFeatures(symbol_sentiment=symbol_sent, market_sentiment=market_sent, macro_features=macro)
+    return _DailyNewsFeatures(
+        symbol_sentiment=symbol_sent,
+        market_sentiment=market_sent,
+        macro_features=macro,
+        news_item_count=int(len(all_texts)),
+    )
+
+
+def _validate_news_coverage_or_raise(daily_ctx: Dict[str, _DailyNewsFeatures], symbols: Sequence[str]) -> Dict[str, Any]:
+    total_days = int(len(daily_ctx))
+    missing_days = int(sum(1 for ctx in daily_ctx.values() if int(getattr(ctx, "news_item_count", 0)) <= 0))
+    missing_ratio = float(missing_days / total_days) if total_days > 0 else 1.0
+
+    report = {
+        "window_days": total_days,
+        "missing_days": missing_days,
+        "missing_ratio": missing_ratio,
+        "max_missing_ratio": float(ML_MAX_NEWS_MISSING_RATIO),
+        "symbol_count": int(len(list(symbols))),
+    }
+
+    if not ML_ENFORCE_NEWS_COVERAGE:
+        return report
+
+    if total_days <= 0:
+        raise DataValidationError(
+            "Training aborted: no candidate training days found for news coverage validation.",
+            code="news_coverage_empty_window",
+            details=report,
+        )
+
+    if missing_ratio > float(ML_MAX_NEWS_MISSING_RATIO):
+        raise DataValidationError(
+            (
+                "Training aborted: news coverage gate failed "
+                f"(missing {missing_days}/{total_days} days = {missing_ratio:.1%}, "
+                f"threshold {float(ML_MAX_NEWS_MISSING_RATIO):.1%})."
+            ),
+            code="news_coverage_threshold_exceeded",
+            details=report,
+        )
+
+    return report
 
 
 def _triple_barrier_label(closes: Sequence[float], idx: int, horizon: int, tp: float, sl: float) -> int:
@@ -435,6 +507,13 @@ async def build_training_matrices(stock_basket: List[str], lookback_days: int, l
             "actual_returns": np.array([], dtype=float),
             "symbols": [],
             "sample_dates": [],
+            "news_coverage": {
+                "window_days": 0,
+                "missing_days": 0,
+                "missing_ratio": 0.0,
+                "max_missing_ratio": float(ML_MAX_NEWS_MISSING_RATIO),
+                "symbol_count": 0,
+            },
         }
 
     histories = await get_price_histories(symbols, days=max(60, int(lookback_days)), concurrency=8)
@@ -459,6 +538,8 @@ async def build_training_matrices(stock_basket: List[str], lookback_days: int, l
     daily_ctx: Dict[str, _DailyNewsFeatures] = {}
     for d in sorted(candidate_dates):
         daily_ctx[d] = _daily_news_features(d, symbols)
+
+    news_coverage = _validate_news_coverage_or_raise(daily_ctx, symbols)
 
     runtime = get_ml_runtime_settings()
     horizon = max(1, int(label_horizon_days))
@@ -515,6 +596,7 @@ async def build_training_matrices(stock_basket: List[str], lookback_days: int, l
             "actual_returns": np.array([], dtype=float),
             "symbols": symbols,
             "sample_dates": [],
+            "news_coverage": news_coverage,
         }
 
     return {
@@ -523,6 +605,7 @@ async def build_training_matrices(stock_basket: List[str], lookback_days: int, l
         "actual_returns": np.array(realized_returns, dtype=float),
         "symbols": symbols,
         "sample_dates": sample_dates,
+        "news_coverage": news_coverage,
     }
 
 
@@ -1414,11 +1497,44 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
 
     runtime = get_ml_runtime_settings()
 
-    dataset = await build_training_matrices(
-        stock_basket=req.stock_basket,
-        lookback_days=req.lookback_days,
-        label_horizon_days=req.label_horizon_days,
-    )
+    try:
+        dataset = await build_training_matrices(
+            stock_basket=req.stock_basket,
+            lookback_days=req.lookback_days,
+            label_horizon_days=req.label_horizon_days,
+        )
+    except DataValidationError as exc:
+        detail = {"code": exc.code, **dict(exc.details or {})}
+        _ml_log(f"pipeline failed: {exc}")
+        runs.update_one(
+            {"run_id": run_id},
+            {
+                "$set": {
+                    "status": "failed",
+                    "stage": "validation_gate",
+                    "error": str(exc),
+                    "validation": detail,
+                    "failed_at": _utc_now(),
+                }
+            },
+        )
+        _alert_admin_ml_issue(str(exc), {"run_id": run_id, **detail})
+        return MLTrainResponse(run_id=run_id, trained_models=[], selected_model_id=None, deleted_underperforming=[])
+    except Exception as exc:
+        _ml_log(f"pipeline failed: build_training_matrices crashed | {exc}")
+        runs.update_one(
+            {"run_id": run_id},
+            {
+                "$set": {
+                    "status": "failed",
+                    "stage": "building_matrices",
+                    "error": f"Dataset build failed: {exc}",
+                    "failed_at": _utc_now(),
+                }
+            },
+        )
+        _alert_admin_ml_issue("Dataset build failed before model training.", {"run_id": run_id, "error": str(exc)})
+        return MLTrainResponse(run_id=run_id, trained_models=[], selected_model_id=None, deleted_underperforming=[])
 
     Xn: np.ndarray = dataset["X_numeric"]
     y: np.ndarray = dataset["y"]
@@ -1435,10 +1551,18 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
         y = y[order]
         actual_returns = actual_returns[order]
 
+    news_coverage = dict(dataset.get("news_coverage") or {})
+
     _ml_log(f"stage: dataset ready | samples={Xn.shape[0]} | labels={len(y)}")
     runs.update_one(
         {"run_id": run_id},
-        {"$set": {"stage": "dataset_ready", "dataset_samples": int(Xn.shape[0])}},
+        {
+            "$set": {
+                "stage": "dataset_ready",
+                "dataset_samples": int(Xn.shape[0]),
+                "news_coverage": news_coverage,
+            }
+        },
     )
 
     if Xn.shape[0] < 120 or len(np.unique(y)) < 2:

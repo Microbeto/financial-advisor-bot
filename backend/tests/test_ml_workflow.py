@@ -8,10 +8,13 @@ import numpy as np
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.services.ml_workflow import (
+    DataValidationError,
+    _DailyNewsFeatures,
     _rank_models,
     _select_prune_candidates,
     _sentiment_score_text,
     _technical_features,
+    _validate_news_coverage_or_raise,
     _weighted_score,
     get_tournament_competitor_stats,
 )
@@ -123,3 +126,51 @@ def test_tournament_stats_extracts_stats_from_bundle(monkeypatch):
     assert out["algorithm"] == "multi_armed_tournament"
     assert out["winner_name"] == "rl_agent"
     assert out["competitor_stats"]["rl_agent"]["sharpe"] == 1.2
+
+
+def test_news_coverage_gate_passes_within_threshold(monkeypatch):
+    monkeypatch.setattr("app.services.ml_workflow.ML_ENFORCE_NEWS_COVERAGE", True)
+    monkeypatch.setattr("app.services.ml_workflow.ML_MAX_NEWS_MISSING_RATIO", 0.10)
+
+    daily_ctx = {
+        "2026-03-01": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=5),
+        "2026-03-02": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=2),
+        "2026-03-03": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=0),
+        "2026-03-04": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=3),
+        "2026-03-05": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=4),
+        "2026-03-06": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=1),
+        "2026-03-07": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=6),
+        "2026-03-08": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=2),
+        "2026-03-09": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=3),
+        "2026-03-10": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=2),
+    }
+
+    report = _validate_news_coverage_or_raise(daily_ctx, symbols=["AAPL", "MSFT"])
+    assert report["window_days"] == 10
+    assert report["missing_days"] == 1
+    assert abs(float(report["missing_ratio"]) - 0.1) < 1e-9
+
+
+def test_news_coverage_gate_fails_when_missing_exceeds_threshold(monkeypatch):
+    monkeypatch.setattr("app.services.ml_workflow.ML_ENFORCE_NEWS_COVERAGE", True)
+    monkeypatch.setattr("app.services.ml_workflow.ML_MAX_NEWS_MISSING_RATIO", 0.10)
+
+    daily_ctx = {
+        "2026-03-01": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=0),
+        "2026-03-02": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=0),
+        "2026-03-03": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=0),
+        "2026-03-04": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=0),
+        "2026-03-05": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=1),
+        "2026-03-06": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=2),
+        "2026-03-07": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=3),
+        "2026-03-08": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=2),
+        "2026-03-09": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=1),
+        "2026-03-10": _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[], news_item_count=1),
+    }
+
+    try:
+        _validate_news_coverage_or_raise(daily_ctx, symbols=["AAPL", "MSFT"])
+        assert False, "Expected DataValidationError when missing ratio exceeds threshold"
+    except DataValidationError as exc:
+        assert exc.code == "news_coverage_threshold_exceeded"
+        assert float(exc.details.get("missing_ratio") or 0.0) > 0.10
