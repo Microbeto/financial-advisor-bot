@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 from .. import db
 from ..models import NewsItem
@@ -42,6 +45,13 @@ NEWS_MAX_ITEMS_MARKET = int(os.getenv("NEWS_MAX_ITEMS_MARKET", "25"))
 NEWS_MAX_ITEMS_PER_SYMBOL = int(os.getenv("NEWS_MAX_ITEMS_PER_SYMBOL", "12"))
 NEWS_CONCURRENCY = int(os.getenv("NEWS_CONCURRENCY", "6"))
 NEWS_HTTP_TIMEOUT = float(os.getenv("NEWS_HTTP_TIMEOUT", "15.0"))
+NEWS_ENABLE_YAHOO_RSS_FALLBACK = os.getenv("NEWS_ENABLE_YAHOO_RSS_FALLBACK", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+NEWS_MAX_ITEMS_RSS_PER_SYMBOL = int(os.getenv("NEWS_MAX_ITEMS_RSS_PER_SYMBOL", "8"))
 
 # Fallback seed symbols if you have zero symbols available
 NEWS_DEFAULT_SEED = os.getenv(
@@ -315,6 +325,92 @@ async def _fetch_gdelt(query: str, start_dt: datetime, max_items: int) -> List[D
         return []
 
 
+def _fmt_gdelt_dt(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S")
+
+
+def _parse_yahoo_rss_feed(xml_text: str, symbol: str, max_items: int) -> List[Dict]:
+    """
+    Parse Yahoo Finance RSS payload and normalize to GDELT-like article dicts.
+    """
+    txt = (xml_text or "").strip()
+    if not txt:
+        return []
+
+    try:
+        root = ET.fromstring(txt)
+    except Exception:
+        return []
+
+    out: List[Dict] = []
+    for item in root.findall("./channel/item"):
+        title = str(item.findtext("title") or "").strip()
+        link = str(item.findtext("link") or "").strip()
+        desc = str(item.findtext("description") or "").strip()
+        pub = str(item.findtext("pubDate") or "").strip()
+        if not title or not link:
+            continue
+
+        dt = None
+        if pub:
+            try:
+                dt = parsedate_to_datetime(pub)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.astimezone(timezone.utc)
+            except Exception:
+                dt = None
+
+        out.append(
+            {
+                "title": title,
+                "url": link,
+                "description": desc,
+                "seendate": _fmt_gdelt_dt(dt) if dt else "",
+                "sourceCollection": "yahoo_rss",
+                "domain": "finance.yahoo.com",
+                "symbol": _normalize_symbol(symbol),
+            }
+        )
+
+        if len(out) >= max(1, int(max_items)):
+            break
+
+    return out
+
+
+async def fetch_yahoo_rss_news(symbol: str, max_items: int = 8) -> List[Dict]:
+    """
+    Fallback ticker news via Yahoo Finance RSS.
+    Never raises. Returns [] on failure.
+    """
+    if httpx is None:
+        return []
+
+    sym = _normalize_symbol(str(symbol))
+    if not sym:
+        return []
+
+    await _rate_limit_take("yahoo")
+
+    url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={quote(sym)}&region=US&lang=en-US"
+    headers = {
+        "User-Agent": "financial-advisor-bot/1.0 (local dev)",
+        "Accept": "application/rss+xml,application/xml,text/xml,*/*",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=NEWS_HTTP_TIMEOUT, headers=headers, follow_redirects=True) as client:
+            r = await client.get(url)
+
+        if r.status_code != 200:
+            return []
+
+        return _parse_yahoo_rss_feed(r.text or "", symbol=sym, max_items=max_items)
+    except Exception:
+        return []
+
+
 async def fetch_gdelt_news(symbol: str, hours: int = 72, max_items: int = 15) -> List[Dict]:
     """
     Fetch news articles mentioning a symbol via GDELT DOC 2.1.
@@ -398,6 +494,10 @@ async def refresh_news_for_symbols(date: str, symbols: List[str]) -> List[NewsIt
         nonlocal out
         async with sem:
             items = await fetch_gdelt_news(sym, hours=NEWS_FETCH_HOURS, max_items=NEWS_MAX_ITEMS_PER_SYMBOL)
+            if not items and NEWS_ENABLE_YAHOO_RSS_FALLBACK:
+                items = await fetch_yahoo_rss_news(sym, max_items=NEWS_MAX_ITEMS_RSS_PER_SYMBOL)
+                if items:
+                    _log("INFO", f"gdelt empty for {sym}; used yahoo_rss fallback ({len(items)} items)")
 
         for a in items:
             doc = _article_to_doc(date=date, symbol=sym, a=a)
