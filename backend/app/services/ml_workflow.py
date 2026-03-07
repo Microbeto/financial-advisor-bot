@@ -634,6 +634,31 @@ def _weighted_score(metrics: Dict[str, float]) -> float:
     )
 
 
+def _data_completeness_from_news_coverage(news_coverage: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    nc = dict(news_coverage or {})
+    window_days = int(nc.get("window_days") or 0)
+    missing_days = int(nc.get("missing_days") or 0)
+
+    ratio_raw = nc.get("missing_ratio")
+    if ratio_raw is None:
+        missing_ratio = float(missing_days / window_days) if window_days > 0 else 1.0
+    else:
+        try:
+            missing_ratio = float(ratio_raw)
+        except Exception:
+            missing_ratio = float(missing_days / window_days) if window_days > 0 else 1.0
+
+    missing_ratio = max(0.0, min(1.0, float(missing_ratio)))
+    coverage_ratio = max(0.0, min(1.0, 1.0 - missing_ratio))
+
+    return {
+        "news_coverage_ratio": float(coverage_ratio),
+        "news_missing_ratio": float(missing_ratio),
+        "news_window_days": int(window_days),
+        "news_missing_days": int(missing_days),
+    }
+
+
 def _predict_proba_or_hard(model: Any, x: np.ndarray) -> np.ndarray:
     if hasattr(model, "predict_proba"):
         try:
@@ -766,6 +791,7 @@ def update_ml_runtime_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
 def _store_model_record(item: Dict[str, Any], run_id: str) -> Dict[str, Any]:
     model_id = f"{item['algorithm']}_{uuid.uuid4().hex[:10]}"
     artifact_path = _save_model_artifact(model_id, item["model"])
+    completeness = _data_completeness_from_news_coverage(item.get("news_coverage"))
 
     doc = {
         "model_id": model_id,
@@ -781,6 +807,11 @@ def _store_model_record(item: Dict[str, Any], run_id: str) -> Dict[str, Any]:
         "is_selected": False,
         "is_deployed": False,
         "underperforming": bool(item.get("underperforming", False)),
+        # Keep top-level ratio for quick filtering in admin/debug queries.
+        "news_coverage_ratio": float(completeness["news_coverage_ratio"]),
+        "metadata": {
+            "data_completeness": completeness,
+        },
         "created_at": _utc_now(),
     }
 
@@ -1627,6 +1658,7 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
 
     infos: List[MLModelInfo] = []
     for item in ranked:
+        item["news_coverage"] = news_coverage
         doc = _store_model_record(item, run_id=run_id)
         infos.append(_doc_to_model_info(doc))
 

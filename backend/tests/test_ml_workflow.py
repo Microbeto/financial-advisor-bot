@@ -10,6 +10,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from app.services.ml_workflow import (
     DataValidationError,
     _DailyNewsFeatures,
+    _data_completeness_from_news_coverage,
     _rank_models,
     _select_prune_candidates,
     _sentiment_score_text,
@@ -174,3 +175,18 @@ def test_news_coverage_gate_fails_when_missing_exceeds_threshold(monkeypatch):
     except DataValidationError as exc:
         assert exc.code == "news_coverage_threshold_exceeded"
         assert float(exc.details.get("missing_ratio") or 0.0) > 0.10
+
+
+def test_data_completeness_from_news_coverage_ratio():
+    out = _data_completeness_from_news_coverage(
+        {
+            "window_days": 100,
+            "missing_days": 2,
+            "missing_ratio": 0.02,
+        }
+    )
+
+    assert abs(float(out["news_coverage_ratio"]) - 0.98) < 1e-9
+    assert abs(float(out["news_missing_ratio"]) - 0.02) < 1e-9
+    assert int(out["news_window_days"]) == 100
+    assert int(out["news_missing_days"]) == 2
