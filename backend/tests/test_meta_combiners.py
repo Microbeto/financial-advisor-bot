@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import sys
 from pathlib import Path
+from urllib.request import urlopen
 
 import numpy as np
 import pytest
@@ -411,3 +413,85 @@ def test_meta_combiner_outperforms_buy_and_hold_sharpe(monkeypatch):
     spy_sharpe = _annualized_sharpe(np.asarray(aligned_spy, dtype=float))
 
     assert ml_sharpe > spy_sharpe, f"Expected ML Sharpe ({ml_sharpe:.4f}) > SPY Sharpe ({spy_sharpe:.4f})"
+
+
+def test_regime_switcher_covid_crash_reduces_exposure(monkeypatch):
+    del monkeypatch
+
+    # Explicit crash-period load: SPY daily candles for Feb-May 2020.
+    url = "https://stooq.com/q/d/l/?s=spy.us&i=d"
+    try:
+        with urlopen(url, timeout=20) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+    except Exception:
+        pytest.skip("Unable to fetch SPY historical data for COVID stress test")
+
+    rows = list(csv.DictReader(raw.splitlines()))
+    if not rows:
+        pytest.skip("No SPY rows returned for COVID stress test")
+
+    crash_rows = [r for r in rows if "2020-02-01" <= str(r.get("Date") or "") <= "2020-05-31"]
+    if len(crash_rows) < 50:
+        pytest.skip("Insufficient Feb-May 2020 SPY rows for COVID stress test")
+
+    dates = [str(r.get("Date") or "") for r in crash_rows]
+    closes = [float(r.get("Close") or 0.0) for r in crash_rows]
+    if len(closes) < 35:
+        pytest.skip("Not enough SPY close points for feature construction")
+
+    market_rows: list[list[float]] = []
+    realized_returns: list[float] = []
+    sample_dates: list[str] = []
+
+    for i in range(20, len(closes) - 5):
+        c_now = float(closes[i])
+        c_prev_1 = float(closes[i - 1])
+        c_prev_5 = float(closes[i - 5])
+        c_prev_20 = float(closes[i - 20])
+
+        r1 = (c_now / c_prev_1 - 1.0) if c_prev_1 > 0 else 0.0
+        r5 = (c_now / c_prev_5 - 1.0) if c_prev_5 > 0 else 0.0
+        r20 = (c_now / c_prev_20 - 1.0) if c_prev_20 > 0 else 0.0
+
+        ret_window = []
+        for j in range(i - 19, i + 1):
+            prev = float(closes[j - 1])
+            cur = float(closes[j])
+            ret_window.append((cur / prev - 1.0) if prev > 0 else 0.0)
+        vol20 = float(np.std(np.asarray(ret_window, dtype=float), ddof=1)) if len(ret_window) > 1 else 0.0
+
+        momentum = (0.6 * r20) + (0.3 * r5) + (0.1 * r1)
+        market_rows.append([float(r1), float(r5), float(r20), float(vol20), float(momentum)])
+
+        fwd_ret = (float(closes[i + 5]) / c_now - 1.0) if c_now > 0 else 0.0
+        realized_returns.append(float(fwd_ret))
+        sample_dates.append(dates[i])
+
+    if len(market_rows) < 20:
+        pytest.skip("Insufficient engineered rows for COVID stress test")
+
+    X = np.asarray(market_rows, dtype=float)
+    returns = np.asarray(realized_returns, dtype=float)
+
+    # Synthetic base-model probabilities over real crash features.
+    momentum = np.asarray(X[:, 4], dtype=float)
+    vol_proxy = np.asarray(X[:, 3], dtype=float)
+    damp = 1.0 / (1.0 + (35.0 * np.maximum(0.0, vol_proxy)))
+    scaled_momentum = 2.5 * momentum * damp
+
+    base_trend = np.clip(0.5 + scaled_momentum, 0.01, 0.99)
+    base_mean_rev = np.clip(0.5 - scaled_momentum, 0.01, 0.99)
+    base_cash = np.full_like(base_trend, 0.5, dtype=float)
+    base_predictions = np.column_stack([base_trend, base_mean_rev, base_cash])
+
+    model = RegimeSwitcherCombiner()
+    model.train(base_predictions, X, returns)
+
+    vol = np.asarray(X[:, 3], dtype=float)
+    stress_idx = int(np.argmax(vol))
+    alloc = float(model.allocate(base_predictions[stress_idx], X[stress_idx]))
+
+    assert alloc < 0.2, (
+        "Expected regime switcher to reduce exposure during COVID crash stress window "
+        f"(date={sample_dates[stress_idx]}, vol={float(vol[stress_idx]):.6f}), got allocation={alloc:.4f}"
+    )
