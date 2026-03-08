@@ -1,24 +1,45 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
+import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.services.ml_workflow import (
     DataValidationError,
     _DailyNewsFeatures,
+    _algo_factories,
+    _build_walk_forward_splits,
     _data_completeness_from_news_coverage,
+    _fit_score_over_walk_forward,
     _rank_models,
     _select_prune_candidates,
     _sentiment_score_text,
     _technical_features,
     _validate_news_coverage_or_raise,
     _weighted_score,
+    build_training_matrices,
     get_tournament_competitor_stats,
 )
+
+
+def _spearman_rank_correlation(x: np.ndarray, y: np.ndarray) -> float:
+    xs = np.asarray(x, dtype=float).reshape(-1)
+    ys = np.asarray(y, dtype=float).reshape(-1)
+    mask = np.isfinite(xs) & np.isfinite(ys)
+    if int(np.sum(mask)) < 3:
+        return 0.0
+
+    xr = pd.Series(xs[mask]).rank(method="average").to_numpy(dtype=float)
+    yr = pd.Series(ys[mask]).rank(method="average").to_numpy(dtype=float)
+
+    corr = np.corrcoef(xr, yr)[0, 1]
+    return float(corr) if np.isfinite(corr) else 0.0
 
 
 def test_sentiment_scoring_positive_negative():
@@ -190,3 +211,70 @@ def test_data_completeness_from_news_coverage_ratio():
     assert abs(float(out["news_missing_ratio"]) - 0.02) < 1e-9
     assert int(out["news_window_days"]) == 100
     assert int(out["news_missing_days"]) == 2
+
+
+def test_model_information_coefficient_is_positive(monkeypatch):
+    # Keep IC evaluation focused on market/price signal by freezing daily news context.
+    monkeypatch.setattr("app.services.ml_workflow._daily_news_features", lambda d, symbols: _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[0.0] * 8, news_item_count=1))
+    monkeypatch.setattr(
+        "app.services.ml_workflow.get_ml_runtime_settings",
+        lambda: {
+            "tp_barrier": 0.04,
+            "sl_barrier": 0.03,
+            "time_barrier_days": 5,
+            "walk_forward_splits": 5,
+            "walk_forward_min_train": 120,
+        },
+    )
+
+    # Representative large-cap S&P 500 subset to keep runtime practical while preserving breadth.
+    sp500_basket = [
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "BRK-B", "JPM", "XOM", "JNJ",
+        "V", "PG", "MA", "HD", "COST", "AVGO", "ABBV", "MRK", "PEP", "KO",
+        "BAC", "WMT", "TMO", "CRM", "ADBE", "ACN", "MCD", "DHR", "LIN", "CSCO",
+    ]
+
+    matrices = asyncio.run(
+        build_training_matrices(
+            stock_basket=sp500_basket,
+            lookback_days=365 * 3,
+            label_horizon_days=5,
+        )
+    )
+
+    X = np.asarray(matrices.get("X_numeric"), dtype=float)
+    y = np.asarray(matrices.get("y"), dtype=int)
+    actual_returns = np.asarray(matrices.get("actual_returns"), dtype=float)
+
+    if X.ndim != 2 or X.shape[0] < 140:
+        pytest.skip("Insufficient live market rows for IC integration test in this environment")
+
+    splits = _build_walk_forward_splits(
+        n_samples=int(X.shape[0]),
+        req_test_size=0.2,
+        n_splits=5,
+        min_train_samples=120,
+    )
+    if not splits:
+        pytest.skip("Unable to construct walk-forward splits for IC integration test")
+
+    algo_map = {name: factory for name, factory in _algo_factories(random_seed=42)}
+    factory = algo_map.get("random_forest")
+    assert factory is not None
+
+    oof_prob = np.full(X.shape[0], np.nan, dtype=float)
+    _fit_score_over_walk_forward(
+        algorithm="random_forest",
+        factory=factory,
+        X=X,
+        y=y,
+        splits=splits,
+        oof_collector=oof_prob,
+    )
+
+    valid_mask = np.isfinite(oof_prob) & np.isfinite(actual_returns)
+    if int(np.sum(valid_mask)) < 80:
+        pytest.skip("Insufficient out-of-fold samples for robust IC evaluation")
+
+    ic = _spearman_rank_correlation(oof_prob[valid_mask], actual_returns[valid_mask])
+    assert ic > 0.02, f"Expected IC > 0.02, got {ic:.4f}"
