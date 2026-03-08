@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -18,6 +19,7 @@ from app.services.ml_workflow import (
     _build_walk_forward_splits,
     _data_completeness_from_news_coverage,
     _fit_score_over_walk_forward,
+    _daily_news_features,
     _rank_models,
     _select_prune_candidates,
     _sentiment_score_text,
@@ -26,6 +28,7 @@ from app.services.ml_workflow import (
     _weighted_score,
     build_training_matrices,
     get_tournament_competitor_stats,
+    predict_for_basket,
 )
 
 
@@ -372,3 +375,89 @@ def test_model_beats_random_permutation(monkeypatch):
 
     assert real_f1 > perm_mean, f"Expected real macro F1 ({real_f1:.4f}) > mean permuted macro F1 ({perm_mean:.4f})"
     assert t_stat > 2.0, f"Expected t-stat > 2.0 for permutation separation, got {t_stat:.4f}"
+
+
+def test_inflation_shock_rotates_out_of_tech_into_defensive_or_cash(monkeypatch):
+    class _DummyFinBert:
+        def score_texts(self, texts):
+            out = []
+            for t in texts:
+                s = str(t or "").lower()
+                score = 0.0
+                if "rate hike" in s or "federal reserve" in s or "inflation" in s:
+                    score -= 0.7
+                if "defensive" in s or "resilient" in s:
+                    score += 0.2
+                out.append(float(max(-1.0, min(1.0, score))))
+            return out
+
+    def _mock_news_for_date(date, symbols, limit=350, include_market=True):
+        del date, limit, include_market
+        news = [
+            SimpleNamespace(title="Federal Reserve signals another rate hike", summary="Persistent inflation keeps policy restrictive.", symbol=""),
+            SimpleNamespace(title="Markets brace for consecutive rate hike path", summary="Higher-for-longer outlook pressures risk assets.", symbol=""),
+            SimpleNamespace(title="Inflation surprise raises odds of aggressive rate hike", summary="Treasury yields jump as Fed hawkishness rises.", symbol=""),
+        ]
+
+        # Symbol-level headlines remain weak for tech and mixed for defensives.
+        for sym in (symbols or []):
+            s = str(sym or "").upper()
+            if s in {"XLU", "XLP", "JNJ", "PG", "KO"}:
+                news.append(SimpleNamespace(title=f"{s} seen as defensive amid rate hike cycle", summary="Cash flows remain resilient.", symbol=s))
+            else:
+                news.append(SimpleNamespace(title=f"{s} valuation pressured by rate hike repricing", summary="Duration-sensitive growth weakens.", symbol=s))
+        return news
+
+    class _SentimentDrivenModel:
+        # Feature layout: tech[0:5], symbol_sent[5], market_sent[6], macro[7:]
+        def predict_proba(self, x):
+            arr = np.asarray(x, dtype=float)
+            sym_sent = arr[:, 5]
+            mkt_sent = arr[:, 6]
+            p_up = np.clip(0.5 + (0.30 * sym_sent) + (0.20 * mkt_sent), 0.01, 0.99)
+            return np.column_stack([1.0 - p_up, p_up])
+
+    async def _mock_histories(symbols, days=120, concurrency=8):
+        del days, concurrency
+        out = {}
+        for sym in symbols:
+            base = 100.0 + (sum(ord(ch) for ch in str(sym)) % 11)
+            pts = [{"c": float(base + (0.05 * i))} for i in range(90)]
+            out[str(sym)] = {"points": pts}
+        return out
+
+    monkeypatch.setattr("app.services.ml_workflow._get_finbert", lambda: _DummyFinBert())
+    monkeypatch.setattr("app.services.ml_workflow.get_news_for_date", _mock_news_for_date)
+    monkeypatch.setattr("app.services.ml_workflow.get_price_histories", _mock_histories)
+    monkeypatch.setattr("app.services.ml_workflow.iso_date_utc", lambda: "2022-06-16")
+    monkeypatch.setattr(
+        "app.services.ml_workflow._selected_or_latest_model",
+        lambda model_id=None: {"model_id": str(model_id or "inflation_stub"), "algorithm": "random_forest"},
+    )
+    monkeypatch.setattr("app.services.ml_workflow._load_model", lambda doc: _SentimentDrivenModel())
+
+    basket = ["NVDA", "TSLA", "AMD", "XLU", "XLP", "JNJ"]
+
+    # Verify consecutive hawkish days are translated into negative market sentiment.
+    daily = [
+        _daily_news_features("2022-06-13", basket),
+        _daily_news_features("2022-06-14", basket),
+        _daily_news_features("2022-06-15", basket),
+    ]
+    assert all(float(d.market_sentiment) < -0.2 for d in daily)
+
+    pred = asyncio.run(predict_for_basket(stock_basket=basket, lookback_days=120, model_id="inflation_stub"))
+
+    probs = {it.symbol: float(it.probability_up) for it in pred.items}
+    raw_w = {sym: max(0.0, p - 0.5) for sym, p in probs.items()}
+    total = float(sum(raw_w.values()))
+    weights = {sym: (w / total if total > 0 else 0.0) for sym, w in raw_w.items()}
+    cash_weight = 1.0 - float(sum(weights.values()))
+
+    tech_weight = float(sum(weights.get(s, 0.0) for s in ["NVDA", "TSLA", "AMD"]))
+    defensive_weight = float(sum(weights.get(s, 0.0) for s in ["XLU", "XLP", "JNJ"]))
+
+    assert (defensive_weight > tech_weight) or (cash_weight >= 0.5), (
+        "Expected inflation shock rotation out of high-beta tech into defensive sectors or cash "
+        f"(tech={tech_weight:.3f}, defensive={defensive_weight:.3f}, cash={cash_weight:.3f})"
+    )
