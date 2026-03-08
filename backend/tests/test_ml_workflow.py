@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.metrics import f1_score
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -278,3 +279,96 @@ def test_model_information_coefficient_is_positive(monkeypatch):
 
     ic = _spearman_rank_correlation(oof_prob[valid_mask], actual_returns[valid_mask])
     assert ic > 0.02, f"Expected IC > 0.02, got {ic:.4f}"
+
+
+def test_model_beats_random_permutation(monkeypatch):
+    # Freeze news side-features so the test measures price/label structure consistently.
+    monkeypatch.setattr("app.services.ml_workflow._daily_news_features", lambda d, symbols: _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[0.0] * 8, news_item_count=1))
+    monkeypatch.setattr(
+        "app.services.ml_workflow.get_ml_runtime_settings",
+        lambda: {
+            "tp_barrier": 0.04,
+            "sl_barrier": 0.03,
+            "time_barrier_days": 5,
+            "walk_forward_splits": 5,
+            "walk_forward_min_train": 120,
+        },
+    )
+
+    sp500_basket = [
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "BRK-B", "JPM", "XOM", "JNJ",
+        "V", "PG", "MA", "HD", "COST", "AVGO", "ABBV", "MRK", "PEP", "KO",
+        "BAC", "WMT", "TMO", "CRM", "ADBE", "ACN", "MCD", "DHR", "LIN", "CSCO",
+    ]
+
+    matrices = asyncio.run(
+        build_training_matrices(
+            stock_basket=sp500_basket,
+            lookback_days=365 * 3,
+            label_horizon_days=5,
+        )
+    )
+
+    X = np.asarray(matrices.get("X_numeric"), dtype=float)
+    y = np.asarray(matrices.get("y"), dtype=int)
+    if X.ndim != 2 or X.shape[0] < 140:
+        pytest.skip("Insufficient live market rows for permutation reality-check test")
+
+    splits = _build_walk_forward_splits(
+        n_samples=int(X.shape[0]),
+        req_test_size=0.2,
+        n_splits=5,
+        min_train_samples=120,
+    )
+    if not splits:
+        pytest.skip("Unable to construct walk-forward splits for permutation reality-check")
+
+    algo_map = {name: factory for name, factory in _algo_factories(random_seed=42)}
+    factory = algo_map.get("random_forest")
+    assert factory is not None
+
+    def _walk_forward_macro_f1(y_input: np.ndarray) -> float:
+        y_true_all: list[int] = []
+        y_pred_all: list[int] = []
+        for tr_idx, te_idx in splits:
+            model = factory()
+            model.fit(X[tr_idx], y_input[tr_idx])
+            probs = np.asarray(model.predict_proba(X[te_idx])[:, 1], dtype=float)
+            preds = np.where(probs >= 0.5, 1, 0)
+
+            y_true_all.extend([int(v) for v in y_input[te_idx]])
+            y_pred_all.extend([int(v) for v in preds])
+
+        if not y_true_all:
+            return 0.0
+
+        return float(
+            f1_score(
+                np.asarray(y_true_all, dtype=int),
+                np.asarray(y_pred_all, dtype=int),
+                average="macro",
+                zero_division=0,
+            )
+        )
+
+    real_f1 = _walk_forward_macro_f1(y)
+
+    rng = np.random.default_rng(20260308)
+    permutation_f1: list[float] = []
+    for _ in range(50):
+        y_perm = rng.permutation(y)
+        permutation_f1.append(_walk_forward_macro_f1(y_perm))
+
+    perm_arr = np.asarray(permutation_f1, dtype=float)
+    perm_mean = float(np.mean(perm_arr)) if perm_arr.size else 0.0
+    perm_std = float(np.std(perm_arr, ddof=1)) if perm_arr.size > 1 else 0.0
+
+    # One-sample t-style separation of real score versus permutation mean.
+    # This checks the real model outperforms the average random-label model with margin.
+    if perm_std <= 1e-12:
+        t_stat = float("inf") if real_f1 > perm_mean else 0.0
+    else:
+        t_stat = (real_f1 - perm_mean) / (perm_std / np.sqrt(float(perm_arr.size)))
+
+    assert real_f1 > perm_mean, f"Expected real macro F1 ({real_f1:.4f}) > mean permuted macro F1 ({perm_mean:.4f})"
+    assert t_stat > 2.0, f"Expected t-stat > 2.0 for permutation separation, got {t_stat:.4f}"
