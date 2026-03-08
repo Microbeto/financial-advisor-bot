@@ -821,6 +821,7 @@ def _store_model_record(item: Dict[str, Any], run_id: str) -> Dict[str, Any]:
 
 
 def _doc_to_model_info(doc: Dict[str, Any]) -> MLModelInfo:
+    resolved_news_ratio = _resolve_news_coverage_ratio(doc)
     raw_feature = str(doc.get("feature_type") or "numeric").lower()
     feature_type: Literal["numeric", "text"] = "text" if raw_feature == "text" else "numeric"
     return MLModelInfo(
@@ -835,11 +836,56 @@ def _doc_to_model_info(doc: Dict[str, Any]) -> MLModelInfo:
         is_selected=bool(doc.get("is_selected", False)),
         is_deployed=bool(doc.get("is_deployed", False)),
         underperforming=bool(doc.get("underperforming", False)),
-        news_coverage_ratio=(
-            float(doc.get("news_coverage_ratio")) if doc.get("news_coverage_ratio") is not None else None
-        ),
+        news_coverage_ratio=resolved_news_ratio,
         created_at=doc.get("created_at"),
     )
+
+
+def _resolve_news_coverage_ratio(doc: Dict[str, Any]) -> Optional[float]:
+    top_level = doc.get("news_coverage_ratio")
+    if top_level is not None:
+        try:
+            return float(top_level)
+        except Exception:
+            pass
+
+    metadata = doc.get("metadata") or {}
+    if isinstance(metadata, dict):
+        data_completeness = metadata.get("data_completeness") or {}
+        if isinstance(data_completeness, dict):
+            nested = data_completeness.get("news_coverage_ratio")
+            if nested is not None:
+                try:
+                    return float(nested)
+                except Exception:
+                    pass
+
+        legacy_news_coverage = metadata.get("news_coverage")
+        if isinstance(legacy_news_coverage, dict):
+            try:
+                comp = _data_completeness_from_news_coverage(legacy_news_coverage)
+                return float(comp.get("news_coverage_ratio") or 0.0)
+            except Exception:
+                pass
+
+    run_id = str(doc.get("run_id") or "").strip()
+    if not run_id:
+        return None
+
+    try:
+        run_doc = _runs_col().find_one({"run_id": run_id}, {"news_coverage": 1}) or {}
+    except Exception:
+        return None
+
+    run_news = run_doc.get("news_coverage")
+    if not isinstance(run_news, dict):
+        return None
+
+    try:
+        comp = _data_completeness_from_news_coverage(run_news)
+        return float(comp.get("news_coverage_ratio") or 0.0)
+    except Exception:
+        return None
 
 
 def list_models() -> List[MLModelInfo]:

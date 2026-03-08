@@ -17,6 +17,7 @@ from app.services.ml_workflow import (
     _DailyNewsFeatures,
     _algo_factories,
     _build_walk_forward_splits,
+    _doc_to_model_info,
     _data_completeness_from_news_coverage,
     _fit_score_over_walk_forward,
     _daily_news_features,
@@ -461,3 +462,62 @@ def test_inflation_shock_rotates_out_of_tech_into_defensive_or_cash(monkeypatch)
         "Expected inflation shock rotation out of high-beta tech into defensive sectors or cash "
         f"(tech={tech_weight:.3f}, defensive={defensive_weight:.3f}, cash={cash_weight:.3f})"
     )
+
+
+def test_doc_to_model_info_reads_news_coverage_ratio_from_metadata_data_completeness():
+    doc = {
+        "model_id": "legacy_1",
+        "algorithm": "random_forest",
+        "family": "tree_ensemble",
+        "feature_type": "numeric",
+        "metrics": {"accuracy": 0.7, "precision": 0.7, "recall": 0.7, "f1": 0.7, "roc_auc": 0.7},
+        "score": 0.7,
+        "rank": 1,
+        "sample_count": 100,
+        "metadata": {
+            "data_completeness": {
+                "news_coverage_ratio": 0.975,
+                "news_missing_ratio": 0.025,
+                "news_window_days": 200,
+                "news_missing_days": 5,
+            }
+        },
+    }
+
+    out = _doc_to_model_info(doc)
+    assert out.news_coverage_ratio is not None
+    assert abs(float(out.news_coverage_ratio) - 0.975) < 1e-9
+
+
+def test_doc_to_model_info_reads_news_coverage_ratio_from_run_doc(monkeypatch):
+    class _FakeRuns:
+        @staticmethod
+        def find_one(query, projection=None):
+            del projection
+            if query.get("run_id") == "run_legacy":
+                return {
+                    "news_coverage": {
+                        "window_days": 100,
+                        "missing_days": 3,
+                        "missing_ratio": 0.03,
+                    }
+                }
+            return None
+
+    monkeypatch.setattr("app.services.ml_workflow._runs_col", lambda: _FakeRuns())
+
+    doc = {
+        "model_id": "legacy_2",
+        "run_id": "run_legacy",
+        "algorithm": "svm_rbf",
+        "family": "svm",
+        "feature_type": "numeric",
+        "metrics": {"accuracy": 0.6, "precision": 0.6, "recall": 0.6, "f1": 0.6, "roc_auc": 0.6},
+        "score": 0.6,
+        "rank": 2,
+        "sample_count": 100,
+    }
+
+    out = _doc_to_model_info(doc)
+    assert out.news_coverage_ratio is not None
+    assert abs(float(out.news_coverage_ratio) - 0.97) < 1e-9
