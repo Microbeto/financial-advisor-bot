@@ -172,6 +172,7 @@ async def lifespan(app: FastAPI):
         limiter.configure("api_health", per_minute=int(os.getenv("API_HEALTH_RPM", "180")))
         limiter.configure("api_read", per_minute=int(os.getenv("API_READ_RPM", "120")))
         limiter.configure("api_write", per_minute=int(os.getenv("API_WRITE_RPM", "60")))
+        limiter.configure("api_llm", per_minute=int(os.getenv("API_LLM_RPM", "12")))
         limiter.configure("api_ml_train", per_minute=int(os.getenv("API_ML_TRAIN_RPM", "10")))
         limiter.configure("api_ml_predict", per_minute=int(os.getenv("API_ML_PREDICT_RPM", "30")))
         limiter.configure("api_ml_admin", per_minute=int(os.getenv("API_ML_ADMIN_RPM", "20")))
@@ -491,6 +492,8 @@ def create_app() -> FastAPI:
     @app.post("/glossary/explain", response_model=GlossaryExplainResponse)
     async def glossary_explain(payload: GlossaryExplainRequest):
         await _acquire_limit("api_read")
+        # Strict queue guard for explicit LLM glossary requests.
+        await _acquire_limit("api_llm")
 
         raw_term = str(payload.term or "").strip()
         if not raw_term:
@@ -662,11 +665,17 @@ def create_app() -> FastAPI:
     @app.get("/dashboard/public", response_model=DashboardResponse)
     async def dashboard_public():
         await _acquire_limit("api_read")
+        # Apply stricter throttle when this route can trigger LLM summary generation.
+        if bool(getattr(intelligence_router, "ollama_available", False)) and str(getattr(intelligence_router, "system_capability", "low") or "low").lower() == "high":
+            await _acquire_limit("api_llm")
         return await _maybe_await(build_dashboard_for_user, PUBLIC_UID)
 
     @app.get("/dashboard", response_model=DashboardResponse)
     async def dashboard(authorization: str | None = Header(default=None)):
         await _acquire_limit("api_read")
+        # Apply stricter throttle when this route can trigger LLM summary generation.
+        if bool(getattr(intelligence_router, "ollama_available", False)) and str(getattr(intelligence_router, "system_capability", "low") or "low").lower() == "high":
+            await _acquire_limit("api_llm")
         claims = _claims_optional(authorization)
         uid = str(claims.get("uid")) if claims else PUBLIC_UID
         return await _maybe_await(build_dashboard_for_user, uid)
@@ -674,6 +683,9 @@ def create_app() -> FastAPI:
     @app.get("/signals/today", response_model=SignalsToday)
     async def signals_today_public(authorization: str | None = Header(default=None)):
         await _acquire_limit("api_read")
+        # Apply stricter throttle when this route can trigger LLM summary generation.
+        if bool(getattr(intelligence_router, "ollama_available", False)) and str(getattr(intelligence_router, "system_capability", "low") or "low").lower() == "high":
+            await _acquire_limit("api_llm")
         claims = _claims_optional(authorization)
         uid = str(claims.get("uid")) if claims else PUBLIC_UID
         dash: DashboardResponse = await _maybe_await(build_dashboard_for_user, uid)

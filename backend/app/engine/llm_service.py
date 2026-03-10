@@ -1,10 +1,15 @@
 import asyncio
 import logging
+import os
 from typing import List, Optional
 
 from ollama import AsyncClient
 
 logger = logging.getLogger(__name__)
+
+OLLAMA_HEALTH_TIMEOUT_SEC = float(os.getenv("OLLAMA_HEALTH_TIMEOUT_SEC", "1.5"))
+OLLAMA_SUMMARY_TIMEOUT_SEC = float(os.getenv("OLLAMA_SUMMARY_TIMEOUT_SEC", "6.0"))
+OLLAMA_GLOSSARY_TIMEOUT_SEC = float(os.getenv("OLLAMA_GLOSSARY_TIMEOUT_SEC", "4.0"))
 
 
 class GenerativeIntelligence:
@@ -15,8 +20,11 @@ class GenerativeIntelligence:
     async def check_health(self) -> bool:
         """Verifies if the local inference server is running."""
         try:
-            # A simple fast call to check connection
-            await self.client.list()
+            # Keep health checks strict so slow inference is treated as unavailable.
+            await asyncio.wait_for(
+                self.client.list(),
+                timeout=max(0.2, float(OLLAMA_HEALTH_TIMEOUT_SEC)),
+            )
             return True
         except Exception:
             return False
@@ -41,14 +49,17 @@ class GenerativeIntelligence:
 
         try:
             # Make the asynchronous call to the local model
-            response = await self.client.chat(
-                model=self.model_name,
-                messages=[
-                    {'role': 'system', 'content': system_prompt},
-                    {'role': 'user', 'content': f"Here are today's top headlines:\n{news_context}"}
-                ],
-                # options allow you to tweak the generation (lower temperature = more deterministic)
-                options={'temperature': 0.2, 'num_predict': 150}
+            response = await asyncio.wait_for(
+                self.client.chat(
+                    model=self.model_name,
+                    messages=[
+                        {'role': 'system', 'content': system_prompt},
+                        {'role': 'user', 'content': f"Here are today's top headlines:\n{news_context}"}
+                    ],
+                    # options allow you to tweak the generation (lower temperature = more deterministic)
+                    options={'temperature': 0.2, 'num_predict': 150}
+                ),
+                timeout=max(0.5, float(OLLAMA_SUMMARY_TIMEOUT_SEC)),
             )
             return response['message']['content'].strip()
 
@@ -74,13 +85,16 @@ class GenerativeIntelligence:
         user_prompt = f"Define this term for a dashboard glossary: {cleaned_term}"
 
         try:
-            response = await self.client.chat(
-                model=self.model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                options={"temperature": 0.2, "num_predict": 100},
+            response = await asyncio.wait_for(
+                self.client.chat(
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    options={"temperature": 0.2, "num_predict": 100},
+                ),
+                timeout=max(0.5, float(OLLAMA_GLOSSARY_TIMEOUT_SEC)),
             )
             out = str(response.get("message", {}).get("content", "") or "").strip()
             return out or None
