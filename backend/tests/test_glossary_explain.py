@@ -16,21 +16,26 @@ import app.main as main_module
 
 @pytest.fixture(autouse=True)
 def _reset_dynamic_glossary_state():
+    # Keep dynamic glossary state isolated between tests.
     glossary_engine._DYNAMIC_GLOSSARY.clear()
     yield
+    # Ensure no test leaves residual dynamic terms behind.
     glossary_engine._DYNAMIC_GLOSSARY.clear()
 
 
 def _prepare_app(monkeypatch: pytest.MonkeyPatch, *, ollama_available: bool) -> TestClient:
+    # Avoid external startup side effects (DB bootstrap/admin bootstrap) in unit tests.
     monkeypatch.setattr(main_module.db, "init_db", lambda: None)
     monkeypatch.setattr(main_module.db, "close_db", lambda: None)
     monkeypatch.setattr(main_module, "ensure_selected_model_exists", lambda: None)
     monkeypatch.setattr(main_module, "bootstrap_admin_if_configured", lambda: None)
 
     async def _fake_run_diagnostics():
+        # Force a stable diagnostics payload for predictable app startup.
         return {"tier": "high"}
 
     monkeypatch.setattr(main_module.intelligence_router, "run_diagnostics", _fake_run_diagnostics, raising=False)
+    # Toggle perceived Ollama availability per test scenario.
     monkeypatch.setattr(main_module.intelligence_router, "ollama_available", ollama_available, raising=False)
 
     app = create_app()
@@ -39,17 +44,21 @@ def _prepare_app(monkeypatch: pytest.MonkeyPatch, *, ollama_available: bool) -> 
 
 def test_glossary_explain_existing_term_short_circuits_llm(monkeypatch: pytest.MonkeyPatch):
     async def _should_not_call_health(self):
+        # Existing terms should bypass LLM health checks.
         raise AssertionError("LLM health check should not run for existing glossary terms")
 
     async def _should_not_call_generate(self, term: str):
+        # Existing terms should bypass LLM text generation.
         raise AssertionError("LLM generation should not run for existing glossary terms")
 
     monkeypatch.setattr(GenerativeIntelligence, "check_health", _should_not_call_health)
     monkeypatch.setattr(GenerativeIntelligence, "generate_term_definition", _should_not_call_generate)
 
     with _prepare_app(monkeypatch, ollama_available=True) as client:
+        # Request a known core glossary term.
         res = client.post("/glossary/explain", json={"term": "volatility"})
 
+    # Validate existing-term response shape and source routing.
     assert res.status_code == 200
     body = res.json()
     assert body["term"] == "Volatility"
@@ -60,9 +69,11 @@ def test_glossary_explain_existing_term_short_circuits_llm(monkeypatch: pytest.M
 
 def test_glossary_explain_llm_path_with_mocked_generation(monkeypatch: pytest.MonkeyPatch):
     async def _healthy(self):
+        # Simulate healthy local inference service.
         return True
 
     async def _generate(self, term: str):
+        # Return deterministic generated text for this unknown term.
         assert term == "convexity"
         return "Convexity measures how a bond's duration changes as yields move. Higher convexity means larger price sensitivity shifts for the same rate change."
 
@@ -70,8 +81,10 @@ def test_glossary_explain_llm_path_with_mocked_generation(monkeypatch: pytest.Mo
     monkeypatch.setattr(GenerativeIntelligence, "generate_term_definition", _generate)
 
     with _prepare_app(monkeypatch, ollama_available=True) as client:
+        # Request an unknown term to trigger LLM generation path.
         res = client.post("/glossary/explain", json={"term": "convexity"})
 
+    # Validate LLM-tagged response and dynamic glossary persistence.
     assert res.status_code == 200
     body = res.json()
     assert body["term"] == "convexity"
@@ -83,17 +96,21 @@ def test_glossary_explain_llm_path_with_mocked_generation(monkeypatch: pytest.Mo
 
 def test_glossary_explain_fallback_when_llm_unavailable(monkeypatch: pytest.MonkeyPatch):
     async def _should_not_call_health(self):
+        # If router says unavailable, health check must never execute.
         raise AssertionError("LLM health check should not run when ollama is unavailable")
 
     async def _should_not_call_generate(self, term: str):
+        # If router says unavailable, generation must never execute.
         raise AssertionError("LLM generation should not run when ollama is unavailable")
 
     monkeypatch.setattr(GenerativeIntelligence, "check_health", _should_not_call_health)
     monkeypatch.setattr(GenerativeIntelligence, "generate_term_definition", _should_not_call_generate)
 
     with _prepare_app(monkeypatch, ollama_available=False) as client:
+        # Request an unknown term to trigger deterministic fallback path.
         res = client.post("/glossary/explain", json={"term": "basis risk"})
 
+    # Validate fallback-tagged response and dynamic glossary persistence.
     assert res.status_code == 200
     body = res.json()
     assert body["term"] == "basis risk"
