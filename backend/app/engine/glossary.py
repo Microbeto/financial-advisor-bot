@@ -7,6 +7,7 @@ _DYNAMIC_GLOSSARY: dict[str, str] = {}
 
 
 def lingo_glossary() -> Dict[str, str]:
+    # Build the base glossary and layer in runtime-generated terms.
     terms: Dict[str, str] = {
         "Regime": "A market state. Risk-on means investors buy risk. Risk-off means they avoid risk.",
         "Momentum": "A measure of recent price change. Positive means rising, negative means falling.",
@@ -53,6 +54,7 @@ _NEGATIVE = [
 
 
 def score_title(title: str) -> float:
+    # Score headline sentiment using simple positive/negative keyword hits.
     t = (title or "").lower()
     score = 0.0
     for w in _POSITIVE:
@@ -65,6 +67,7 @@ def score_title(title: str) -> float:
 
 
 def short_why_from_title(title: str) -> str:
+    # Map headline themes to short plain-language market impact explanations.
     t = (title or "").strip()
     if not t:
         return "News item"
@@ -86,11 +89,13 @@ def short_why_from_title(title: str) -> str:
 
 
 def safe_text(s: str, limit: int = 280) -> str:
+    # Normalize whitespace and cap output length for safe UI/API responses.
     s = re.sub(r"\s+", " ", (s or "").strip())
     return s[:limit]
 
 
 def update_glossary_from_news_summaries(items: list[dict]) -> None:
+    # Auto-add common finance terms when they appear in generated news summaries.
     for it in items:
         s = (it.get("summary") or "").strip()
         if not s:
@@ -114,6 +119,7 @@ def update_glossary_from_news_summaries(items: list[dict]) -> None:
             "ETF",
             "yield",
         ]:
+            # Save the first sentence as a compact glossary definition.
             if term.lower() in s.lower() and term not in _DYNAMIC_GLOSSARY:
                 first_sentence = s.split(".", 1)[0].strip()
                 if first_sentence:
@@ -121,6 +127,7 @@ def update_glossary_from_news_summaries(items: list[dict]) -> None:
 
 
 def set_glossary_term(key: str, value: str) -> None:
+    # Upsert a dynamic glossary term, or remove it when value is empty.
     k = str(key or "").strip()
     v = str(value or "").strip()
     if not k:
@@ -132,8 +139,10 @@ def set_glossary_term(key: str, value: str) -> None:
 
 
 def remove_glossary_term(key: str) -> None:
+    # Remove one term from the dynamic glossary map if it exists.
     _DYNAMIC_GLOSSARY.pop(str(key or "").strip(), None)
 
 
 def list_dynamic_glossary_terms() -> Dict[str, str]:
+    # Return a shallow copy so callers cannot mutate internal state directly.
     return dict(_DYNAMIC_GLOSSARY)
