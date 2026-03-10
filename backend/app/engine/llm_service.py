@@ -55,3 +55,35 @@ class GenerativeIntelligence:
         except Exception as e:
             logger.error(f"Local LLM generation failed: {e}")
             return "Market summary temporarily unavailable due to inference server disconnect."
+
+    async def generate_term_definition(self, term: str) -> Optional[str]:
+        """
+        Generates a short plain-language definition for a financial term.
+        """
+        cleaned_term = str(term or "").strip()
+        if not cleaned_term:
+            return None
+
+        system_prompt = """
+        You are a financial glossary assistant.
+        Explain one term in plain English for retail investors.
+        Keep the answer to 1-2 short sentences (max 55 words), neutral and factual.
+        Focus on practical meaning in markets. Do not provide investing advice.
+        """
+
+        user_prompt = f"Define this term for a dashboard glossary: {cleaned_term}"
+
+        try:
+            response = await self.client.chat(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                options={"temperature": 0.2, "num_predict": 100},
+            )
+            out = str(response.get("message", {}).get("content", "") or "").strip()
+            return out or None
+        except Exception as e:
+            logger.error(f"Local LLM glossary generation failed: {e}")
+            return None

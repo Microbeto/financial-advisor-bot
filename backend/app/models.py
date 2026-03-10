@@ -283,6 +283,17 @@ class GlossaryResponse(BaseModel):
     terms: Dict[str, str]
 
 
+class GlossaryExplainRequest(BaseModel):
+    term: str
+
+
+class GlossaryExplainResponse(BaseModel):
+    term: str
+    definition: str
+    generated: bool = False
+    source: Literal["existing", "llm", "fallback"] = "existing"
+
+
 class MLTrainingRequest(BaseModel):
     stock_basket: List[str] = Field(default_factory=list)
     lookback_days: int = 240

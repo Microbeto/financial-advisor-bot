@@ -436,6 +436,20 @@ export async function getGlossary() {
   });
 }
 
+export async function explainGlossaryTerm(term: string) {
+  return request<{
+    term: string;
+    definition: string;
+    generated: boolean;
+    source: "existing" | "llm" | "fallback";
+  }>("/glossary/explain", {
+    method: "POST",
+    body: { term },
+    timeoutMs: 30000,
+    retry: { attempts: 2, baseDelayMs: 300, maxDelayMs: 2000 },
+  });
+}
+
 /** ML model registry (premium+) */
 export async function getMlModels() {
   const res = await request<MLModelListResponse>("/ml/models", {

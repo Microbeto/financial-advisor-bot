@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { getGlossary } from "@/lib/api-client";
+import { explainGlossaryTerm, getGlossary } from "@/lib/api-client";
 
 type GlossaryMap = Record<string, string>;
 
@@ -16,6 +16,9 @@ export default function GlossaryPage() {
   const [err, setErr] = useState<string | null>(null);
   const [terms, setTerms] = useState<GlossaryMap>({});
   const [query, setQuery] = useState("");
+  const [newTerm, setNewTerm] = useState("");
+  const [explainBusy, setExplainBusy] = useState(false);
+  const [explainMsg, setExplainMsg] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,6 +65,39 @@ export default function GlossaryPage() {
       .sort((a, b) => a.term.localeCompare(b.term));
   }, [terms, query]);
 
+  async function onExplainTerm() {
+    const term = newTerm.trim();
+    if (!term) {
+      setExplainMsg("Enter a term first.");
+      return;
+    }
+
+    try {
+      setExplainBusy(true);
+      setExplainMsg(null);
+      const res = await explainGlossaryTerm(term);
+      setTerms((prev) => ({
+        ...prev,
+        [res.term]: res.definition,
+      }));
+      setQuery(res.term);
+      setNewTerm("");
+
+      if (res.source === "llm") {
+        setExplainMsg(`Added ${res.term} via LLM explanation.`);
+      } else if (res.source === "existing") {
+        setExplainMsg(`Loaded existing glossary definition for ${res.term}.`);
+      } else {
+        setExplainMsg(`Added ${res.term} using fallback explanation.`);
+      }
+    } catch (e) {
+      console.error(e);
+      setExplainMsg("Could not explain this term right now.");
+    } finally {
+      setExplainBusy(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <header className="space-y-2">
@@ -86,7 +122,25 @@ export default function GlossaryPage() {
             placeholder="Search terms or definitions…"
             className="w-full max-w-sm rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
           />
+
+          <div className="flex w-full max-w-xl items-center gap-2">
+            <input
+              value={newTerm}
+              onChange={(e) => setNewTerm(e.target.value)}
+              placeholder="Need an obscure term explained? e.g. convexity"
+              className="w-full rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+            />
+            <button
+              type="button"
+              onClick={onExplainTerm}
+              disabled={explainBusy}
+              className="inline-flex items-center rounded-lg border border-cyan-700/60 bg-cyan-900/30 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-900/45 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {explainBusy ? "Explaining..." : "Explain term"}
+            </button>
+          </div>
         </div>
+        {explainMsg ? <p className="text-xs text-cyan-200">{explainMsg}</p> : null}
       </header>
 
       {err ? (

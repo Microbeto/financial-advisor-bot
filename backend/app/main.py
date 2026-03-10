@@ -20,6 +20,8 @@ from .models import (
     Holding,
     DashboardResponse,
     GlossaryResponse,
+    GlossaryExplainRequest,
+    GlossaryExplainResponse,
     GlossaryTermUpdateRequest,
     CustomUniverseRequest,
     LoginRequest,
@@ -79,7 +81,8 @@ from .services.ml_workflow import (
     update_ml_runtime_settings,
 )
 from .core.utils import iso_date_utc
-from .engine.glossary import lingo_glossary, remove_glossary_term, set_glossary_term
+from .engine.glossary import lingo_glossary, remove_glossary_term, safe_text, set_glossary_term
+from .engine.llm_service import GenerativeIntelligence
 from .ml.model_router import intelligence_router
 
 
@@ -205,6 +208,29 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Financial Advisor Bot API", lifespan=lifespan)
+    glossary_ai = GenerativeIntelligence()
+
+    def _normalize_term(s: str) -> str:
+        return str(s or "").strip().lower()
+
+    def _lookup_glossary_definition(term: str) -> tuple[str, str] | None:
+        q = _normalize_term(term)
+        if not q:
+            return None
+        for key, value in (lingo_glossary() or {}).items():
+            if _normalize_term(key) == q:
+                k = str(key or "").strip()
+                v = str(value or "").strip()
+                if k and v:
+                    return k, v
+        return None
+
+    def _fallback_term_definition(term: str) -> str:
+        t = str(term or "").strip()
+        return (
+            f"{t} is a finance term used to describe market behavior, valuation, risk, or portfolio impact. "
+            "Exact usage can vary by strategy and timeframe."
+        )
 
     def _obj_id(s: str):
         try:
@@ -461,6 +487,53 @@ def create_app() -> FastAPI:
     def glossary():
         _acquire_limit_sync("api_read")
         return GlossaryResponse(terms=lingo_glossary())
+
+    @app.post("/glossary/explain", response_model=GlossaryExplainResponse)
+    async def glossary_explain(payload: GlossaryExplainRequest):
+        await _acquire_limit("api_read")
+
+        raw_term = str(payload.term or "").strip()
+        if not raw_term:
+            raise HTTPException(status_code=400, detail="term is required")
+        if len(raw_term) > 80:
+            raise HTTPException(status_code=400, detail="term is too long")
+
+        existing = _lookup_glossary_definition(raw_term)
+        if existing:
+            return GlossaryExplainResponse(
+                term=existing[0],
+                definition=safe_text(existing[1], limit=360),
+                generated=False,
+                source="existing",
+            )
+
+        llm_available = bool(getattr(intelligence_router, "ollama_available", False))
+        llm_text = None
+        if llm_available:
+            try:
+                if await glossary_ai.check_health():
+                    llm_text = await _maybe_await(glossary_ai.generate_term_definition, raw_term)
+            except Exception:
+                llm_text = None
+
+        if llm_text:
+            definition = safe_text(llm_text, limit=360)
+            set_glossary_term(raw_term, definition)
+            return GlossaryExplainResponse(
+                term=raw_term,
+                definition=definition,
+                generated=True,
+                source="llm",
+            )
+
+        fallback = safe_text(_fallback_term_definition(raw_term), limit=360)
+        set_glossary_term(raw_term, fallback)
+        return GlossaryExplainResponse(
+            term=raw_term,
+            definition=fallback,
+            generated=True,
+            source="fallback",
+        )
 
     @app.post("/auth/register", response_model=AuthResponse)
     def register(payload: RegisterRequest):
