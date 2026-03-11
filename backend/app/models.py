@@ -318,6 +318,7 @@ class MLModelInfo(BaseModel):
     algorithm: str
     family: str
     feature_type: Literal["numeric", "text"] = "numeric"
+    nlp_pipeline: Optional[Literal["lexicon", "finbert", "cascade"]] = None
     metrics: MLModelMetric = Field(default_factory=MLModelMetric)
     rank: int = 0
     score: float = 0.0
@@ -342,11 +343,19 @@ class MLModelListResponse(BaseModel):
 
 class MLSelectionRequest(BaseModel):
     top_k: int = 1
+    nlp_pipeline: Optional[Literal["lexicon", "finbert", "cascade"]] = None
 
 
 class MLSelectionResponse(BaseModel):
     selected_model_id: Optional[str] = None
     ranked_model_ids: List[str] = Field(default_factory=list)
+
+
+class MLNlpPipelineMigrationRequest(BaseModel):
+    dry_run: bool = True
+    limit: int = 0
+    rollout_iso: Optional[str] = None
+    default_pipeline: Literal["lexicon", "finbert", "cascade"] = "finbert"
 
 
 class MLPruneRequest(BaseModel):
