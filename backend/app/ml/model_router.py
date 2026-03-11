@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import time
+import importlib
 from typing import Any, Dict, Literal
 
 import httpx
@@ -36,11 +38,20 @@ class IntelligenceRouter:
 
     def __init__(self, ollama_url: str | None = None) -> None:
         self.system_capability: Tier = "low"
+        self.sentiment_pipeline: str = "lexicon"
         self.ollama_available: bool = False
         self.total_ram_gb: float = 0.0
         self.available_ram_gb: float = 0.0
         self.gpu_available: bool = False
         self.ollama_url = (ollama_url or os.getenv("OLLAMA_TAGS_URL", "http://localhost:11434/api/tags")).strip()
+        self.ollama_inference_ms: float | None = None
+        self.finbert_inference_ms: float | None = None
+
+        self._finbert_ready = False
+        self._finbert_tokenizer = None
+        self._finbert_model = None
+        self._finbert_torch = None
+        self._finbert_model_name = ""
 
     def _read_ram(self) -> tuple[float, float]:
         if not PSUTIL_AVAILABLE or psutil is None:
@@ -89,6 +100,92 @@ class IntelligenceRouter:
         except Exception:
             return False
 
+    def _ensure_finbert_loaded(self) -> bool:
+        if self._finbert_ready and self._finbert_tokenizer is not None and self._finbert_model is not None and self._finbert_torch is not None:
+            return True
+
+        try:
+            torch_mod = importlib.import_module("torch")
+            tr_mod = importlib.import_module("transformers")
+        except Exception:
+            return False
+
+        cache_dir = os.getenv("FINBERT_CACHE_DIR", "").strip() or None
+        candidates = [
+            os.getenv("FINBERT_MODEL_NAME", "ProsusAI/finbert").strip(),
+            "ProsusAI/finbert",
+            "yiyanghkust/finbert-tone",
+        ]
+        deduped = []
+        for name in candidates:
+            if name and name not in deduped:
+                deduped.append(name)
+
+        for model_name in deduped:
+            try:
+                kwargs: Dict[str, Any] = {"local_files_only": True}
+                if cache_dir:
+                    kwargs["cache_dir"] = cache_dir
+                tokenizer = tr_mod.AutoTokenizer.from_pretrained(model_name, **kwargs)
+                model = tr_mod.AutoModelForSequenceClassification.from_pretrained(model_name, **kwargs)
+                model.eval()
+                self._finbert_tokenizer = tokenizer
+                self._finbert_model = model
+                self._finbert_torch = torch_mod
+                self._finbert_model_name = str(model_name)
+                self._finbert_ready = True
+                return True
+            except Exception:
+                continue
+
+        return False
+
+    def _bench_finbert_sync(self, text: str) -> float | None:
+        if not self._ensure_finbert_loaded():
+            return None
+        if self._finbert_tokenizer is None or self._finbert_model is None or self._finbert_torch is None:
+            return None
+
+        t0 = time.perf_counter()
+        try:
+            enc = self._finbert_tokenizer([text], return_tensors="pt", padding=True, truncation=True, max_length=256)
+            with self._finbert_torch.no_grad():
+                logits = self._finbert_model(**enc).logits
+                _ = self._finbert_torch.softmax(logits, dim=1).cpu().numpy()
+            return float((time.perf_counter() - t0) * 1000.0)
+        except Exception:
+            return None
+
+    async def _benchmark_finbert_latency_ms(self) -> float | None:
+        text = "Benchmark headline: company reports mixed earnings and guides cautiously."
+        try:
+            import asyncio
+
+            return await asyncio.to_thread(self._bench_finbert_sync, text)
+        except Exception:
+            return None
+
+    async def _benchmark_ollama_latency_ms(self) -> float | None:
+        base = self.ollama_url.rsplit("/api/tags", 1)[0] if "/api/tags" in self.ollama_url else "http://localhost:11434"
+        gen_url = f"{base}/api/generate"
+        bench_model = os.getenv("OLLAMA_BENCH_MODEL", os.getenv("OLLAMA_MODEL", "llama3.2:1b")).strip()
+        payload = {
+            "model": bench_model,
+            "prompt": "Summarize market mood in one short sentence.",
+            "stream": False,
+            "options": {"num_predict": 8},
+        }
+        try:
+            timeout = httpx.Timeout(max(0.5, float(os.getenv("ROUTER_OLLAMA_BENCH_TIMEOUT_SEC", "6.0"))))
+            t0 = time.perf_counter()
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(gen_url, json=payload)
+            if resp.status_code >= 400:
+                return None
+            return float((time.perf_counter() - t0) * 1000.0)
+        except Exception:
+            return None
+
     async def run_diagnostics(self) -> Dict[str, Any]:
         """
         Runs during server startup to determine capability tier.
@@ -101,6 +198,8 @@ class IntelligenceRouter:
         self.available_ram_gb = float(available_ram)
         self.gpu_available = bool(gpu_available)
         self.ollama_available = bool(ollama_active)
+        self.ollama_inference_ms = None
+        self.finbert_inference_ms = None
 
         if gpu_available and available_ram > 8.0 and ollama_active:
             self.system_capability = "high"
@@ -112,12 +211,37 @@ class IntelligenceRouter:
             self.system_capability = "low"
             logger.warning("Model router: low tier enabled (fallback NLP path).")
 
+        run_bench = os.getenv("ROUTER_ENABLE_MICRO_BENCH", "1").strip().lower() in ("1", "true", "yes", "on")
+        max_finbert_ms = float(os.getenv("ROUTER_FINBERT_MAX_MS", "500"))
+        max_ollama_ms = float(os.getenv("ROUTER_OLLAMA_MAX_MS", "6000"))
+
+        if run_bench:
+            self.ollama_inference_ms = await self._benchmark_ollama_latency_ms()
+            self.finbert_inference_ms = await self._benchmark_finbert_latency_ms()
+
+            if self.ollama_inference_ms is not None and self.ollama_inference_ms > max_ollama_ms:
+                self.ollama_available = False
+
+            if self.finbert_inference_ms is None or self.finbert_inference_ms > max_finbert_ms:
+                # Enforce latency budget over raw hardware presence.
+                self.system_capability = "low"
+
+        if self.system_capability in ("high", "medium"):
+            self.sentiment_pipeline = "cascade"
+        else:
+            self.sentiment_pipeline = "lexicon"
+
         return {
             "tier": self.system_capability,
             "ram_total_gb": round(self.total_ram_gb, 2),
             "ram_available_gb": round(self.available_ram_gb, 2),
             "gpu": self.gpu_available,
             "ollama_active": self.ollama_available,
+            "sentiment_pipeline": self.sentiment_pipeline,
+            "latency_ms": {
+                "finbert": self.finbert_inference_ms,
+                "ollama": self.ollama_inference_ms,
+            },
             "psutil_available": PSUTIL_AVAILABLE,
             "torch_available": TORCH_AVAILABLE,
         }
@@ -127,8 +251,11 @@ class IntelligenceRouter:
         Placeholder routing decision for sentiment engine selection.
         Replace return values with real pipeline classes as needed.
         """
+        pipeline = str(self.sentiment_pipeline or "").strip().lower()
+        if pipeline in ("lexicon", "finbert", "cascade"):
+            return pipeline
         if self.system_capability in ("high", "medium"):
-            return "finbert"
+            return "cascade"
         return "lexicon"
 
 
