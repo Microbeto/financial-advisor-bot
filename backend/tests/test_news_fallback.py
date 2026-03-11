@@ -3,9 +3,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from app.services.news import _parse_yahoo_rss_feed
+from app.services.news import _parse_yahoo_rss_feed, _score_title
 
 
 def test_parse_yahoo_rss_feed_normalizes_items():
@@ -48,3 +50,19 @@ def test_parse_yahoo_rss_feed_respects_max_items():
 
     out = _parse_yahoo_rss_feed(xml_text, symbol="MSFT", max_items=2)
     assert len(out) == 2
+
+
+def test_score_title_cascade_escalates_ambiguous_to_finbert(monkeypatch: pytest.MonkeyPatch):
+    class _StubFinBert:
+        @staticmethod
+        def score(text: str):
+            del text
+            return 0.42
+
+    monkeypatch.setattr("app.services.news.NEWS_CASCADE_LEXICON_ABS_THRESHOLD", 2.0)
+    monkeypatch.setattr("app.services.news._sentiment_pipeline_name", lambda: "cascade")
+    monkeypatch.setattr("app.services.news._get_news_finbert", lambda: _StubFinBert())
+
+    # Neutral/ambiguous title should escalate to FinBERT score under cascade mode.
+    s = _score_title("Markets close with mixed sector moves")
+    assert abs(float(s) - 0.42) < 1e-9
