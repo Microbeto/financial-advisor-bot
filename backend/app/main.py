@@ -30,6 +30,7 @@ from .models import (
     MLModelListResponse,
     MLPredictionRequest,
     MLPredictionResponse,
+    MLNlpPipelineMigrationRequest,
     MLPruneRequest,
     MLPruneResponse,
     MLRuntimeSettingsResponse,
@@ -68,6 +69,7 @@ from .services.admin.cache_admin import clear_cache, get_cache_stats, prune_stal
 from .services.universe import get_user_custom_universe, set_universe_override, set_user_custom_universe
 from .services.users import delete_user, list_users, update_user_role
 from .services.ml_workflow import (
+    backfill_model_nlp_pipeline,
     deploy_neural_network,
     ensure_selected_model_exists,
     get_model_feature_importances,
@@ -794,11 +796,11 @@ def create_app() -> FastAPI:
         return await _maybe_await(train_models_async, req)
 
     @app.get("/ml/models", response_model=MLModelListResponse)
-    def ml_models_list(authorization: str | None = Header(default=None)):
+    def ml_models_list(nlp_pipeline: str | None = None, authorization: str | None = Header(default=None)):
         _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("premium", "admin", "manager"))
-        return MLModelListResponse(items=list_models())
+        return MLModelListResponse(items=list_models(nlp_pipeline=nlp_pipeline))
 
     @app.get("/ml/models/tournament-stats", response_model=MLTournamentStatsResponse)
     def ml_models_tournament_stats(model_id: str | None = None, authorization: str | None = Header(default=None)):
@@ -813,7 +815,33 @@ def create_app() -> FastAPI:
         _acquire_limit_sync("api_ml_admin")
         claims = _claims_required(authorization)
         require_roles(claims, ("admin",))
-        return select_best_models(top_k=req.top_k)
+        return select_best_models(top_k=req.top_k, nlp_pipeline=req.nlp_pipeline)
+
+    @app.get("/admin/ml/models", response_model=MLModelListResponse)
+    def admin_ml_models_by_pipeline(nlp_pipeline: str, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
+        claims = _claims_required(authorization)
+        require_roles(claims, ("admin", "manager"))
+        return MLModelListResponse(items=list_models(nlp_pipeline=nlp_pipeline))
+
+    @app.post("/admin/ml/models/select", response_model=MLSelectionResponse)
+    def admin_ml_select_by_pipeline(nlp_pipeline: str, top_k: int = 1, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
+        claims = _claims_required(authorization)
+        require_roles(claims, ("admin",))
+        return select_best_models(top_k=max(1, int(top_k)), nlp_pipeline=nlp_pipeline)
+
+    @app.post("/admin/ml/models/migrate-nlp-pipeline")
+    def admin_ml_migrate_nlp_pipeline(req: MLNlpPipelineMigrationRequest, authorization: str | None = Header(default=None)):
+        _acquire_limit_sync("api_ml_admin")
+        claims = _claims_required(authorization)
+        require_roles(claims, ("admin",))
+        return backfill_model_nlp_pipeline(
+            dry_run=bool(req.dry_run),
+            limit=int(req.limit),
+            rollout_iso=req.rollout_iso,
+            default_pipeline=str(req.default_pipeline),
+        )
 
     @app.post("/ml/models/prune", response_model=MLPruneResponse)
     def ml_prune(req: MLPruneRequest, authorization: str | None = Header(default=None)):
