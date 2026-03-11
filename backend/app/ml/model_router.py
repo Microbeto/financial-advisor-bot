@@ -37,6 +37,7 @@ class IntelligenceRouter:
     """
 
     def __init__(self, ollama_url: str | None = None) -> None:
+        # Initialize router with system capability flags and model state
         self.system_capability: Tier = "low"
         self.sentiment_pipeline: str = "lexicon"
         self.ollama_available: bool = False
@@ -54,6 +55,7 @@ class IntelligenceRouter:
         self._finbert_model_name = ""
 
     def _read_ram(self) -> tuple[float, float]:
+        # Query system RAM usage and return total and available GB
         if not PSUTIL_AVAILABLE or psutil is None:
             return (0.0, 0.0)
         try:
@@ -65,6 +67,7 @@ class IntelligenceRouter:
             return (0.0, 0.0)
 
     def _read_gpu_available(self) -> bool:
+        # Check for GPU availability via torch CUDA or nvidia-smi fallback
         # Primary path: torch CUDA visibility.
         if TORCH_AVAILABLE and torch is not None:
             try:
@@ -92,6 +95,7 @@ class IntelligenceRouter:
         return False
 
     async def _ping_ollama(self) -> bool:
+        # Test if Ollama server is reachable and responsive
         try:
             timeout = httpx.Timeout(2.0)
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -101,6 +105,7 @@ class IntelligenceRouter:
             return False
 
     def _ensure_finbert_loaded(self) -> bool:
+        # Load FinBERT model and tokenizer, attempting multiple candidate models
         if self._finbert_ready and self._finbert_tokenizer is not None and self._finbert_model is not None and self._finbert_torch is not None:
             return True
 
@@ -141,6 +146,7 @@ class IntelligenceRouter:
         return False
 
     def _bench_finbert_sync(self, text: str) -> float | None:
+        # Measure FinBERT inference latency in milliseconds
         if not self._ensure_finbert_loaded():
             return None
         if self._finbert_tokenizer is None or self._finbert_model is None or self._finbert_torch is None:
@@ -157,6 +163,7 @@ class IntelligenceRouter:
             return None
 
     async def _benchmark_finbert_latency_ms(self) -> float | None:
+        # Run FinBERT benchmark in a thread-safe async context
         text = "Benchmark headline: company reports mixed earnings and guides cautiously."
         try:
             import asyncio
@@ -166,6 +173,7 @@ class IntelligenceRouter:
             return None
 
     async def _benchmark_ollama_latency_ms(self) -> float | None:
+        # Measure Ollama inference latency by generating a short response
         base = self.ollama_url.rsplit("/api/tags", 1)[0] if "/api/tags" in self.ollama_url else "http://localhost:11434"
         gen_url = f"{base}/api/generate"
         bench_model = os.getenv("OLLAMA_BENCH_MODEL", os.getenv("OLLAMA_MODEL", "llama3.2:1b")).strip()
@@ -190,6 +198,7 @@ class IntelligenceRouter:
         """
         Runs during server startup to determine capability tier.
         """
+        # Query hardware resources and service availability
         total_ram, available_ram = self._read_ram()
         gpu_available = self._read_gpu_available()
         ollama_active = await self._ping_ollama()
@@ -201,6 +210,7 @@ class IntelligenceRouter:
         self.ollama_inference_ms = None
         self.finbert_inference_ms = None
 
+        # Determine system capability tier based on available resources
         if gpu_available and available_ram > 8.0 and ollama_active:
             self.system_capability = "high"
             logger.info("Model router: high tier enabled (GPU + RAM + Ollama).")
@@ -211,6 +221,7 @@ class IntelligenceRouter:
             self.system_capability = "low"
             logger.warning("Model router: low tier enabled (fallback NLP path).")
 
+        # Optionally run latency benchmarks and adjust tier based on performance thresholds
         run_bench = os.getenv("ROUTER_ENABLE_MICRO_BENCH", "1").strip().lower() in ("1", "true", "yes", "on")
         max_finbert_ms = float(os.getenv("ROUTER_FINBERT_MAX_MS", "500"))
         max_ollama_ms = float(os.getenv("ROUTER_OLLAMA_MAX_MS", "6000"))
@@ -226,6 +237,7 @@ class IntelligenceRouter:
                 # Enforce latency budget over raw hardware presence.
                 self.system_capability = "low"
 
+        # Select sentiment pipeline based on system capability tier
         if self.system_capability in ("high", "medium"):
             self.sentiment_pipeline = "cascade"
         else:
@@ -251,6 +263,7 @@ class IntelligenceRouter:
         Placeholder routing decision for sentiment engine selection.
         Replace return values with real pipeline classes as needed.
         """
+        # Validate and return selected sentiment pipeline based on system tier
         pipeline = str(self.sentiment_pipeline or "").strip().lower()
         if pipeline in ("lexicon", "finbert", "cascade"):
             return pipeline
