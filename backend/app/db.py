@@ -306,6 +306,7 @@ def _ensure_indexes() -> None:
     # ML models: registry + deployment state
     _ensure_index(mm, "model_id", name="ml_models_model_id_1", unique=True)
     _ensure_index(mm, "algorithm", name="ml_models_algorithm_1", unique=False)
+    _ensure_index(mm, "nlp_pipeline", name="ml_models_nlp_pipeline_1", unique=False)
     _ensure_index(mm, "rank", name="ml_models_rank_1", unique=False)
     _ensure_index(mm, "is_selected", name="ml_models_is_selected_1", unique=False)
     _ensure_index(mm, "is_deployed", name="ml_models_is_deployed_1", unique=False)
