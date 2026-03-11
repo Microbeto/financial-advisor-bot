@@ -892,6 +892,7 @@ def _doc_to_model_info(doc: Dict[str, Any]) -> MLModelInfo:
         algorithm=str(doc.get("algorithm") or ""),
         family=str(doc.get("family") or "other"),
         feature_type=feature_type,
+        nlp_pipeline=_resolve_model_nlp_pipeline(doc),
         metrics=MLModelMetric(**(doc.get("metrics") or {})),
         rank=int(doc.get("rank") or 0),
         score=float(doc.get("score") or 0.0),
@@ -966,9 +967,25 @@ def _resolve_model_nlp_pipeline(doc: Dict[str, Any]) -> str:
     return "finbert"
 
 
-def list_models() -> List[MLModelInfo]:
+def _pipeline_filter_query(nlp_pipeline: Optional[str], include_legacy_finbert: bool = True) -> Dict[str, Any]:
+    if nlp_pipeline is None:
+        return {}
+
+    p = _normalize_nlp_pipeline(nlp_pipeline)
+    if p == "finbert" and include_legacy_finbert:
+        return {
+            "$or": [
+                {"nlp_pipeline": "finbert"},
+                {"nlp_pipeline": {"$exists": False}},
+                {"nlp_pipeline": None},
+            ]
+        }
+    return {"nlp_pipeline": p}
+
+
+def list_models(nlp_pipeline: Optional[str] = None) -> List[MLModelInfo]:
     col = _registry_col()
-    docs = list(col.find({}).sort([("rank", 1), ("score", -1), ("created_at", -1)]))
+    docs = list(col.find(_pipeline_filter_query(nlp_pipeline)).sort([("rank", 1), ("score", -1), ("created_at", -1)]))
     out: List[MLModelInfo] = []
     for d in docs:
         d.pop("_id", None)
@@ -1162,12 +1179,16 @@ def ensure_selected_model_exists() -> Optional[str]:
     return model_id
 
 
-def select_best_models(top_k: int = 1) -> MLSelectionResponse:
+def select_best_models(top_k: int = 1, nlp_pipeline: Optional[str] = None) -> MLSelectionResponse:
     col = _registry_col()
-    docs = list(col.find({}).sort([("score", -1), ("created_at", -1)]))
+    filt = _pipeline_filter_query(nlp_pipeline)
+    docs = list(col.find(filt).sort([("score", -1), ("created_at", -1)]))
     ranked = _rank_models(docs)
 
-    col.update_many({}, {"$set": {"is_selected": False}})
+    if nlp_pipeline is None:
+        col.update_many({}, {"$set": {"is_selected": False}})
+    else:
+        col.update_many(filt, {"$set": {"is_selected": False}})
 
     chosen = ranked[: max(1, int(top_k))]
     ids = [str(d.get("model_id")) for d in chosen if d.get("model_id")]
@@ -1175,6 +1196,120 @@ def select_best_models(top_k: int = 1) -> MLSelectionResponse:
         col.update_many({"model_id": {"$in": ids}}, {"$set": {"is_selected": True}})
 
     return MLSelectionResponse(selected_model_id=(ids[0] if ids else None), ranked_model_ids=[str(d.get("model_id")) for d in ranked])
+
+
+def _parse_iso_utc(value: str) -> Optional[datetime]:
+    s = str(value or "").strip()
+    if not s:
+        return None
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def backfill_model_nlp_pipeline(
+    dry_run: bool = True,
+    limit: int = 0,
+    rollout_iso: Optional[str] = None,
+    default_pipeline: str = "finbert",
+) -> Dict[str, Any]:
+    col = _registry_col()
+    runs = _runs_col()
+
+    docs = list(col.find({}).sort([("created_at", 1)]))
+    if int(limit) > 0:
+        docs = docs[: int(limit)]
+
+    resolved_default = _normalize_nlp_pipeline(default_pipeline)
+    cutoff = _parse_iso_utc(rollout_iso or os.getenv("ML_NLP_PIPELINE_ROLLOUT_AT", "2026-03-11T00:00:00+00:00"))
+
+    inspected = 0
+    updated = 0
+    skipped = 0
+    by_reason: Dict[str, int] = {}
+    changes: List[Dict[str, Any]] = []
+
+    for doc in docs:
+        inspected += 1
+        mid = str(doc.get("model_id") or "")
+        if not mid:
+            skipped += 1
+            continue
+
+        current = str(doc.get("nlp_pipeline") or "").strip().lower()
+        if current in ("lexicon", "finbert", "cascade"):
+            skipped += 1
+            continue
+
+        inferred: Optional[str] = None
+        reason = ""
+
+        metadata = doc.get("metadata") or {}
+        if isinstance(metadata, dict):
+            nested = str(metadata.get("nlp_pipeline") or "").strip().lower()
+            if nested in ("lexicon", "finbert", "cascade"):
+                inferred = nested
+                reason = "metadata"
+
+        if inferred is None:
+            run_id = str(doc.get("run_id") or "").strip()
+            if run_id:
+                try:
+                    run_doc = runs.find_one({"run_id": run_id}, {"nlp_pipeline": 1, "result": 1}) or {}
+                    run_pipe = str(run_doc.get("nlp_pipeline") or "").strip().lower()
+                    if run_pipe not in ("lexicon", "finbert", "cascade") and isinstance(run_doc.get("result"), dict):
+                        run_pipe = str((run_doc.get("result") or {}).get("nlp_pipeline") or "").strip().lower()
+                    if run_pipe in ("lexicon", "finbert", "cascade"):
+                        inferred = run_pipe
+                        reason = "run_metadata"
+                except Exception:
+                    pass
+
+        if inferred is None:
+            art = Path(str(doc.get("artifact_path") or "")) if doc.get("artifact_path") else None
+            art_dt: Optional[datetime] = None
+            if art is not None and art.exists():
+                try:
+                    art_dt = datetime.fromtimestamp(art.stat().st_mtime, tz=timezone.utc)
+                except Exception:
+                    art_dt = None
+
+            if cutoff is not None and art_dt is not None:
+                inferred = "cascade" if art_dt >= cutoff else "finbert"
+                reason = "artifact_timestamp"
+
+        if inferred is None:
+            inferred = resolved_default
+            reason = "default"
+
+        by_reason[reason] = int(by_reason.get(reason, 0)) + 1
+        changes.append({"model_id": mid, "nlp_pipeline": inferred, "reason": reason})
+
+        if not dry_run:
+            col.update_one(
+                {"model_id": mid},
+                {
+                    "$set": {
+                        "nlp_pipeline": inferred,
+                        "updated_at": _utc_now(),
+                        "metadata.nlp_pipeline": inferred,
+                    }
+                },
+            )
+            updated += 1
+
+    return {
+        "dry_run": bool(dry_run),
+        "inspected": int(inspected),
+        "updated": int(updated),
+        "skipped": int(skipped),
+        "reason_counts": by_reason,
+        "changes": changes,
+    }
 
 
 def _select_prune_candidates(docs: List[Dict[str, Any]], max_models: int) -> List[Dict[str, Any]]:
@@ -1607,14 +1742,8 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
         return MLPredictionResponse(model_id=str(doc.get("model_id")), items=items)
 
     col = _registry_col()
-    selected_docs = list(col.find({"is_selected": True, "nlp_pipeline": active_pipeline}).sort([("score", -1), ("created_at", -1)]))
-    if not selected_docs and active_pipeline == "finbert":
-        # Legacy compatibility: old models may not have explicit nlp_pipeline persisted.
-        selected_docs = list(
-            col.find({"is_selected": True, "$or": [{"nlp_pipeline": {"$exists": False}}, {"nlp_pipeline": None}]}).sort(
-                [("score", -1), ("created_at", -1)]
-            )
-        )
+    selected_query = {"is_selected": True, **_pipeline_filter_query(active_pipeline)}
+    selected_docs = list(col.find(selected_query).sort([("score", -1), ("created_at", -1)]))
     if not selected_docs:
         fallback = _selected_or_latest_model(model_id=None)
         if fallback and _resolve_model_nlp_pipeline(fallback) == active_pipeline:

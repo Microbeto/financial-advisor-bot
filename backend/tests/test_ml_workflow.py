@@ -27,9 +27,11 @@ from app.services.ml_workflow import (
     _technical_features,
     _validate_news_coverage_or_raise,
     _weighted_score,
+    backfill_model_nlp_pipeline,
     build_training_matrices,
     get_tournament_competitor_stats,
     predict_for_basket,
+    select_best_models,
 )
 
 
@@ -591,3 +593,89 @@ def test_predict_for_basket_uses_selected_docs_matching_runtime_pipeline(monkeyp
     out = asyncio.run(predict_for_basket(stock_basket=["AAPL", "MSFT"], lookback_days=120, model_id=None))
     assert out.model_id == "mix[lex_ok]"
     assert len(out.items) == 2
+
+
+def test_select_best_models_filters_by_pipeline(monkeypatch):
+    class _FakeCursor(list):
+        def sort(self, _spec):
+            return self
+
+    class _FakeRegistry:
+        def __init__(self):
+            self.docs = [
+                {"model_id": "fin_1", "score": 0.9, "created_at": 1, "nlp_pipeline": "finbert", "is_selected": False},
+                {"model_id": "lex_1", "score": 0.8, "created_at": 2, "nlp_pipeline": "lexicon", "is_selected": False},
+            ]
+
+        def find(self, query):
+            out = []
+            for d in self.docs:
+                if "nlp_pipeline" in query and d.get("nlp_pipeline") != query.get("nlp_pipeline"):
+                    continue
+                out.append(dict(d))
+            return _FakeCursor(out)
+
+        def update_many(self, query, update):
+            for d in self.docs:
+                if "nlp_pipeline" in query and d.get("nlp_pipeline") != query.get("nlp_pipeline"):
+                    continue
+                if "model_id" in query and isinstance(query.get("model_id"), dict):
+                    allowed = set(query["model_id"].get("$in") or [])
+                    if d.get("model_id") not in allowed:
+                        continue
+                for k, v in (update.get("$set") or {}).items():
+                    d[k] = v
+
+    fake_col = _FakeRegistry()
+    monkeypatch.setattr("app.services.ml_workflow._registry_col", lambda: fake_col)
+
+    out = select_best_models(top_k=1, nlp_pipeline="lexicon")
+    assert out.selected_model_id == "lex_1"
+    assert any(d.get("model_id") == "lex_1" and d.get("is_selected") for d in fake_col.docs)
+    assert all(not d.get("is_selected") for d in fake_col.docs if d.get("model_id") != "lex_1")
+
+
+def test_backfill_model_nlp_pipeline_uses_run_metadata(monkeypatch):
+    class _FakeCursor(list):
+        def sort(self, _spec):
+            return self
+
+    class _FakeRegistry:
+        def __init__(self):
+            self.docs = [{"model_id": "m1", "run_id": "r1", "artifact_path": "", "metadata": {}}]
+
+        def find(self, _query):
+            return _FakeCursor([dict(x) for x in self.docs])
+
+        def update_one(self, query, update):
+            mid = str(query.get("model_id") or "")
+            for d in self.docs:
+                if str(d.get("model_id") or "") != mid:
+                    continue
+                for k, v in (update.get("$set") or {}).items():
+                    if k == "metadata.nlp_pipeline":
+                        md = dict(d.get("metadata") or {})
+                        md["nlp_pipeline"] = v
+                        d["metadata"] = md
+                    else:
+                        d[k] = v
+
+    class _FakeRuns:
+        @staticmethod
+        def find_one(query, projection=None):
+            del projection
+            if query.get("run_id") == "r1":
+                return {"nlp_pipeline": "cascade", "result": {"nlp_pipeline": "cascade"}}
+            return None
+
+    fake_col = _FakeRegistry()
+    monkeypatch.setattr("app.services.ml_workflow._registry_col", lambda: fake_col)
+    monkeypatch.setattr("app.services.ml_workflow._runs_col", lambda: _FakeRuns())
+
+    dry = backfill_model_nlp_pipeline(dry_run=True)
+    assert dry["inspected"] == 1
+    assert dry["changes"][0]["nlp_pipeline"] == "cascade"
+
+    applied = backfill_model_nlp_pipeline(dry_run=False)
+    assert applied["updated"] == 1
+    assert fake_col.docs[0].get("nlp_pipeline") == "cascade"
