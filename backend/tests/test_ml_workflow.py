@@ -521,3 +521,73 @@ def test_doc_to_model_info_reads_news_coverage_ratio_from_run_doc(monkeypatch):
     out = _doc_to_model_info(doc)
     assert out.news_coverage_ratio is not None
     assert abs(float(out.news_coverage_ratio) - 0.97) < 1e-9
+
+
+def test_predict_for_basket_rejects_model_pipeline_mismatch(monkeypatch):
+    class _ToyModel:
+        @staticmethod
+        def predict_proba(x):
+            arr = np.asarray(x, dtype=float)
+            n = arr.shape[0]
+            p_up = np.full(n, 0.6, dtype=float)
+            return np.column_stack([1.0 - p_up, p_up])
+
+    async def _mock_histories(symbols, days=120, concurrency=8):
+        del days, concurrency
+        return {str(sym): {"points": [{"c": float(100 + i)} for i in range(60)]} for sym in symbols}
+
+    monkeypatch.setattr("app.services.ml_workflow._active_nlp_pipeline", lambda: "lexicon")
+    monkeypatch.setattr(
+        "app.services.ml_workflow._daily_news_features",
+        lambda d, symbols, nlp_pipeline=None: _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[0.0] * 8, news_item_count=1, nlp_pipeline=str(nlp_pipeline or "lexicon")),
+    )
+    monkeypatch.setattr("app.services.ml_workflow.get_price_histories", _mock_histories)
+    monkeypatch.setattr(
+        "app.services.ml_workflow._selected_or_latest_model",
+        lambda model_id=None: {"model_id": str(model_id or "mismatch_stub"), "algorithm": "random_forest", "nlp_pipeline": "finbert"},
+    )
+    monkeypatch.setattr("app.services.ml_workflow._load_model", lambda doc: _ToyModel())
+
+    with pytest.raises(RuntimeError, match="incompatible NLP pipeline"):
+        asyncio.run(predict_for_basket(stock_basket=["AAPL", "MSFT"], lookback_days=120, model_id="mismatch_stub"))
+
+
+def test_predict_for_basket_uses_selected_docs_matching_runtime_pipeline(monkeypatch):
+    class _ToyModel:
+        @staticmethod
+        def predict_proba(x):
+            arr = np.asarray(x, dtype=float)
+            n = arr.shape[0]
+            p_up = np.full(n, 0.7, dtype=float)
+            return np.column_stack([1.0 - p_up, p_up])
+
+    class _FakeCursor(list):
+        def sort(self, _spec):
+            return self
+
+    class _FakeRegistry:
+        @staticmethod
+        def find(query):
+            if query.get("is_selected") and query.get("nlp_pipeline") == "lexicon":
+                return _FakeCursor([
+                    {"model_id": "lex_ok", "algorithm": "random_forest", "nlp_pipeline": "lexicon", "artifact_path": "stub"}
+                ])
+            return _FakeCursor([])
+
+    async def _mock_histories(symbols, days=120, concurrency=8):
+        del days, concurrency
+        return {str(sym): {"points": [{"c": float(100 + i)} for i in range(60)]} for sym in symbols}
+
+    monkeypatch.setattr("app.services.ml_workflow._active_nlp_pipeline", lambda: "lexicon")
+    monkeypatch.setattr(
+        "app.services.ml_workflow._daily_news_features",
+        lambda d, symbols, nlp_pipeline=None: _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[0.0] * 8, news_item_count=1, nlp_pipeline=str(nlp_pipeline or "lexicon")),
+    )
+    monkeypatch.setattr("app.services.ml_workflow.get_price_histories", _mock_histories)
+    monkeypatch.setattr("app.services.ml_workflow._registry_col", lambda: _FakeRegistry())
+    monkeypatch.setattr("app.services.ml_workflow._selected_or_latest_model", lambda model_id=None: None)
+    monkeypatch.setattr("app.services.ml_workflow._load_model", lambda doc: _ToyModel())
+
+    out = asyncio.run(predict_for_basket(stock_basket=["AAPL", "MSFT"], lookback_days=120, model_id=None))
+    assert out.model_id == "mix[lex_ok]"
+    assert len(out.items) == 2
