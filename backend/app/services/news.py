@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import os
 import re
 import xml.etree.ElementTree as ET
+import time
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Dict, List, Optional, Tuple
@@ -92,6 +94,78 @@ _NEGATIVE = [
     "slump",
 ]
 
+NEWS_CASCADE_LEXICON_ABS_THRESHOLD = float(os.getenv("NEWS_CASCADE_LEXICON_ABS_THRESHOLD", "2.0"))
+
+
+class _NewsFinBertInferencer:
+    def __init__(self) -> None:
+        self._ready = False
+        self._tokenizer = None
+        self._model = None
+        self._torch = None
+        self._last_init_ts = 0.0
+        self._init()
+
+    def _init(self) -> None:
+        self._last_init_ts = time.time()
+        try:
+            torch_mod = importlib.import_module("torch")
+            tr_mod = importlib.import_module("transformers")
+        except Exception:
+            self._ready = False
+            return
+
+        model_name = os.getenv("FINBERT_MODEL_NAME", "ProsusAI/finbert").strip() or "ProsusAI/finbert"
+        cache_dir = os.getenv("FINBERT_CACHE_DIR", "").strip() or None
+
+        for local_only in (True, False):
+            try:
+                kwargs = {"local_files_only": local_only}
+                if cache_dir:
+                    kwargs["cache_dir"] = cache_dir
+                tokenizer = tr_mod.AutoTokenizer.from_pretrained(model_name, **kwargs)
+                model = tr_mod.AutoModelForSequenceClassification.from_pretrained(model_name, **kwargs)
+                model.eval()
+                self._tokenizer = tokenizer
+                self._model = model
+                self._torch = torch_mod
+                self._ready = True
+                return
+            except Exception:
+                continue
+
+        self._ready = False
+
+    def score(self, text: str) -> Optional[float]:
+        t = str(text or "").strip()
+        if not t:
+            return 0.0
+        if not self._ready and (time.time() - float(self._last_init_ts)) >= 300.0:
+            self._init()
+        if not self._ready or self._tokenizer is None or self._model is None or self._torch is None:
+            return None
+        try:
+            enc = self._tokenizer([t], return_tensors="pt", padding=True, truncation=True, max_length=256)
+            with self._torch.no_grad():
+                logits = self._model(**enc).logits
+                probs = self._torch.softmax(logits, dim=1).cpu().numpy()
+            row = probs[0]
+            if row.shape[0] >= 3:
+                return float(max(-1.0, min(1.0, float(row[2] - row[0]))))
+            return 0.0
+        except Exception:
+            return None
+
+
+_NEWS_FINBERT: Optional[_NewsFinBertInferencer] = None
+
+
+def _get_news_finbert() -> _NewsFinBertInferencer:
+    global _NEWS_FINBERT
+    if _NEWS_FINBERT is None:
+        _NEWS_FINBERT = _NewsFinBertInferencer()
+    return _NEWS_FINBERT
+
 
 def _utc_day_key(dt: Optional[datetime] = None) -> str:
     d = (dt or datetime.now(timezone.utc)).astimezone(timezone.utc).date()
@@ -145,9 +219,20 @@ def _score_title(title: str) -> float:
     """
     pipeline = _sentiment_pipeline_name()
     if pipeline == "finbert":
-        # Until FinBERT inference is wired for article-level scoring in this service,
-        # use the lexicon proxy and keep routing explicit through the router.
+        fb = _get_news_finbert().score(title)
+        if fb is not None:
+            return float(fb)
         return _score_title_lexicon(title)
+
+    if pipeline == "cascade":
+        lex = _score_title_lexicon(title)
+        if abs(float(lex)) >= float(NEWS_CASCADE_LEXICON_ABS_THRESHOLD):
+            return float(lex)
+        fb = _get_news_finbert().score(title)
+        if fb is not None:
+            return float(fb)
+        return float(lex)
+
     if pipeline in ("lexicon", "tfidf"):
         return _score_title_lexicon(title)
     return _score_title_keyword_intensity(title)
