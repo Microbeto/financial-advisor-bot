@@ -19,6 +19,7 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC
 
 from .. import db
+from ..ml.model_router import intelligence_router
 from ..ml.registry import get_meta_competitor_factories
 from ..ml.meta_interface import scalar_allocation
 from ..ml.tournament import run_walk_forward_tournament
@@ -58,6 +59,8 @@ FINBERT_BATCH_SIZE = int(os.getenv("FINBERT_BATCH_SIZE", "16"))
 FINBERT_RETRY_SECONDS = int(os.getenv("FINBERT_RETRY_SECONDS", "300"))
 ML_ENFORCE_NEWS_COVERAGE = os.getenv("ML_ENFORCE_NEWS_COVERAGE", "1").strip().lower() in ("1", "true", "yes", "on")
 ML_MAX_NEWS_MISSING_RATIO = float(os.getenv("ML_MAX_NEWS_MISSING_RATIO", "0.10"))
+ML_NLP_PIPELINE = os.getenv("ML_NLP_PIPELINE", "auto").strip().lower()  # auto|lexicon|finbert|cascade
+ML_CASCADE_AMBIGUOUS_ABS = float(os.getenv("ML_CASCADE_AMBIGUOUS_ABS", "0.12"))
 
 
 def _finbert_candidates() -> List[str]:
@@ -385,6 +388,52 @@ class _DailyNewsFeatures:
     market_sentiment: float
     macro_features: List[float]
     news_item_count: int = 0
+    nlp_pipeline: str = "lexicon"
+
+
+def _normalize_nlp_pipeline(pipeline: Optional[str]) -> str:
+    v = str(pipeline or "").strip().lower()
+    if v in ("lexicon", "finbert", "cascade"):
+        return v
+    return "lexicon"
+
+
+def _active_nlp_pipeline() -> str:
+    forced = _normalize_nlp_pipeline(ML_NLP_PIPELINE)
+    if forced != "lexicon" or str(ML_NLP_PIPELINE).strip().lower() == "lexicon":
+        return forced
+
+    # auto mode: defer to runtime diagnostics.
+    try:
+        routed = _normalize_nlp_pipeline(str(intelligence_router.get_sentiment_pipeline() or "lexicon"))
+        return routed
+    except Exception:
+        return "lexicon"
+
+
+def _score_texts_with_pipeline(texts: Sequence[str], pipeline: str) -> List[float]:
+    cleaned = [str(t or "").strip() for t in texts if str(t or "").strip()]
+    if not cleaned:
+        return []
+
+    mode = _normalize_nlp_pipeline(pipeline)
+    if mode == "lexicon":
+        return [_sentiment_score_text(t) for t in cleaned]
+
+    if mode == "finbert":
+        return _get_finbert().score_texts(cleaned)
+
+    # Cascade mode: cheap lexicon first, escalate only ambiguous rows to FinBERT.
+    lex = np.asarray([_sentiment_score_text(t) for t in cleaned], dtype=float)
+    out = np.asarray(lex, dtype=float)
+    amb_mask = np.abs(lex) < float(max(0.0, ML_CASCADE_AMBIGUOUS_ABS))
+    if bool(np.any(amb_mask)):
+        amb_idx = np.where(amb_mask)[0]
+        amb_texts = [cleaned[int(i)] for i in amb_idx.tolist()]
+        fb = _get_finbert().score_texts(amb_texts)
+        for i, score in zip(amb_idx.tolist(), fb):
+            out[int(i)] = float(score)
+    return out.tolist()
 
 
 def _macro_term_features(texts: Sequence[str]) -> List[float]:
@@ -402,8 +451,9 @@ def _news_text(item: Any) -> str:
     return f"{title}. {summary}".strip()
 
 
-def _daily_news_features(date: str, symbols: Sequence[str]) -> _DailyNewsFeatures:
+def _daily_news_features(date: str, symbols: Sequence[str], nlp_pipeline: Optional[str] = None) -> _DailyNewsFeatures:
     syms = list(dict.fromkeys([str(s).upper().strip() for s in symbols if str(s).strip()]))
+    active_pipeline = _normalize_nlp_pipeline(nlp_pipeline or _active_nlp_pipeline())
     items = get_news_for_date(date, symbols=syms, limit=350, include_market=True)
 
     symbol_texts: Dict[str, List[str]] = {s: [] for s in syms}
@@ -421,13 +471,12 @@ def _daily_news_features(date: str, symbols: Sequence[str]) -> _DailyNewsFeature
         else:
             market_texts.append(txt)
 
-    finbert = _get_finbert()
-    market_scores = finbert.score_texts(market_texts or all_texts)
+    market_scores = _score_texts_with_pipeline(market_texts or all_texts, active_pipeline)
     market_sent = float(np.mean(market_scores)) if market_scores else 0.0
 
     symbol_sent: Dict[str, float] = {}
     for sym in syms:
-        s_scores = finbert.score_texts(symbol_texts.get(sym) or [])
+        s_scores = _score_texts_with_pipeline(symbol_texts.get(sym) or [], active_pipeline)
         if s_scores:
             symbol_sent[sym] = float(np.mean(s_scores))
         else:
@@ -439,6 +488,7 @@ def _daily_news_features(date: str, symbols: Sequence[str]) -> _DailyNewsFeature
         market_sentiment=market_sent,
         macro_features=macro,
         news_item_count=int(len(all_texts)),
+        nlp_pipeline=active_pipeline,
     )
 
 
@@ -499,8 +549,14 @@ def _triple_barrier_label(closes: Sequence[float], idx: int, horizon: int, tp: f
     return 1 if terminal_ret >= 0 else 0
 
 
-async def build_training_matrices(stock_basket: List[str], lookback_days: int, label_horizon_days: int) -> Dict[str, Any]:
+async def build_training_matrices(
+    stock_basket: List[str],
+    lookback_days: int,
+    label_horizon_days: int,
+    nlp_pipeline: Optional[str] = None,
+) -> Dict[str, Any]:
     symbols = list(dict.fromkeys([(s or "").upper().strip() for s in stock_basket if (s or "").strip()]))
+    active_pipeline = _normalize_nlp_pipeline(nlp_pipeline or _active_nlp_pipeline())
     if not symbols:
         return {
             "X_numeric": np.zeros((0, 15), dtype=float),
@@ -508,6 +564,7 @@ async def build_training_matrices(stock_basket: List[str], lookback_days: int, l
             "actual_returns": np.array([], dtype=float),
             "symbols": [],
             "sample_dates": [],
+            "nlp_pipeline": active_pipeline,
             "news_coverage": {
                 "window_days": 0,
                 "missing_days": 0,
@@ -538,7 +595,7 @@ async def build_training_matrices(stock_basket: List[str], lookback_days: int, l
 
     daily_ctx: Dict[str, _DailyNewsFeatures] = {}
     for d in sorted(candidate_dates):
-        daily_ctx[d] = _daily_news_features(d, symbols)
+        daily_ctx[d] = _daily_news_features(d, symbols, nlp_pipeline=active_pipeline)
 
     news_coverage = _validate_news_coverage_or_raise(daily_ctx, symbols)
 
@@ -597,6 +654,7 @@ async def build_training_matrices(stock_basket: List[str], lookback_days: int, l
             "actual_returns": np.array([], dtype=float),
             "symbols": symbols,
             "sample_dates": [],
+            "nlp_pipeline": active_pipeline,
             "news_coverage": news_coverage,
         }
 
@@ -606,6 +664,7 @@ async def build_training_matrices(stock_basket: List[str], lookback_days: int, l
         "actual_returns": np.array(realized_returns, dtype=float),
         "symbols": symbols,
         "sample_dates": sample_dates,
+        "nlp_pipeline": active_pipeline,
         "news_coverage": news_coverage,
     }
 
@@ -793,6 +852,7 @@ def _store_model_record(item: Dict[str, Any], run_id: str) -> Dict[str, Any]:
     model_id = f"{item['algorithm']}_{uuid.uuid4().hex[:10]}"
     artifact_path = _save_model_artifact(model_id, item["model"])
     completeness = _data_completeness_from_news_coverage(item.get("news_coverage"))
+    nlp_pipeline = _normalize_nlp_pipeline(str(item.get("nlp_pipeline") or "lexicon"))
 
     doc = {
         "model_id": model_id,
@@ -808,10 +868,12 @@ def _store_model_record(item: Dict[str, Any], run_id: str) -> Dict[str, Any]:
         "is_selected": False,
         "is_deployed": False,
         "underperforming": bool(item.get("underperforming", False)),
+        "nlp_pipeline": nlp_pipeline,
         # Keep top-level ratio for quick filtering in admin/debug queries.
         "news_coverage_ratio": float(completeness["news_coverage_ratio"]),
         "metadata": {
             "data_completeness": completeness,
+            "nlp_pipeline": nlp_pipeline,
         },
         "created_at": _utc_now(),
     }
@@ -887,6 +949,21 @@ def _resolve_news_coverage_ratio(doc: Dict[str, Any]) -> Optional[float]:
         return float(comp.get("news_coverage_ratio") or 0.0)
     except Exception:
         return None
+
+
+def _resolve_model_nlp_pipeline(doc: Dict[str, Any]) -> str:
+    top_level = str(doc.get("nlp_pipeline") or "").strip().lower()
+    if top_level in ("lexicon", "finbert", "cascade"):
+        return top_level
+
+    metadata = doc.get("metadata") or {}
+    if isinstance(metadata, dict):
+        nested = str(metadata.get("nlp_pipeline") or "").strip().lower()
+        if nested in ("lexicon", "finbert", "cascade"):
+            return nested
+
+    # Legacy models were trained with FinBERT path (with internal lexicon fallback).
+    return "finbert"
 
 
 def list_models() -> List[MLModelInfo]:
@@ -1485,7 +1562,8 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
     items: List[MLPredictionItem] = []
     histories = await get_price_histories(symbols, days=max(30, int(lookback_days)), concurrency=8)
     today = iso_date_utc()
-    day_ctx = _daily_news_features(today, symbols)
+    active_pipeline = _active_nlp_pipeline()
+    day_ctx = _daily_news_features(today, symbols, nlp_pipeline=active_pipeline)
 
     X_num: List[List[float]] = []
     valid_symbols: List[str] = []
@@ -1506,6 +1584,12 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
         doc = _selected_or_latest_model(model_id)
         if not doc:
             raise RuntimeError(f"Requested model_id not found: {model_id}")
+        model_pipeline = _resolve_model_nlp_pipeline(doc)
+        if model_pipeline != active_pipeline:
+            raise RuntimeError(
+                "Requested model was trained with incompatible NLP pipeline "
+                f"('{model_pipeline}') while runtime pipeline is '{active_pipeline}'."
+            )
         model = _load_model(doc)
         algo = str(doc.get("algorithm") or "")
         if algo == "stacking_meta" and isinstance(model, dict):
@@ -1523,10 +1607,17 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
         return MLPredictionResponse(model_id=str(doc.get("model_id")), items=items)
 
     col = _registry_col()
-    selected_docs = list(col.find({"is_selected": True}).sort([("score", -1), ("created_at", -1)]))
+    selected_docs = list(col.find({"is_selected": True, "nlp_pipeline": active_pipeline}).sort([("score", -1), ("created_at", -1)]))
+    if not selected_docs and active_pipeline == "finbert":
+        # Legacy compatibility: old models may not have explicit nlp_pipeline persisted.
+        selected_docs = list(
+            col.find({"is_selected": True, "$or": [{"nlp_pipeline": {"$exists": False}}, {"nlp_pipeline": None}]}).sort(
+                [("score", -1), ("created_at", -1)]
+            )
+        )
     if not selected_docs:
         fallback = _selected_or_latest_model(model_id=None)
-        if fallback:
+        if fallback and _resolve_model_nlp_pipeline(fallback) == active_pipeline:
             selected_docs = [fallback]
     selected_docs = selected_docs[: max(1, int(ML_SELECTED_TOP_K))]
 
@@ -1534,6 +1625,8 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
     used_ids: List[str] = []
 
     for d in selected_docs:
+        if _resolve_model_nlp_pipeline(d) != active_pipeline:
+            continue
         try:
             model = _load_model(d)
             algo = str(d.get("algorithm") or "")
@@ -1549,7 +1642,10 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
             continue
 
     if not model_probs:
-        raise RuntimeError("No selected model is available. Select the best model before prediction.")
+        raise RuntimeError(
+            "No selected model is available for NLP pipeline "
+            f"'{active_pipeline}'. Train/select a model built with this pipeline."
+        )
 
     probs = np.mean(np.column_stack(model_probs), axis=1)
 
@@ -1605,11 +1701,15 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
 
     runtime = get_ml_runtime_settings()
 
+    active_pipeline = _active_nlp_pipeline()
+    _ml_log(f"active NLP pipeline for training: {active_pipeline}")
+
     try:
         dataset = await build_training_matrices(
             stock_basket=req.stock_basket,
             lookback_days=req.lookback_days,
             label_horizon_days=req.label_horizon_days,
+            nlp_pipeline=active_pipeline,
         )
     except DataValidationError as exc:
         detail = {"code": exc.code, **dict(exc.details or {})}
@@ -1660,6 +1760,7 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
         actual_returns = actual_returns[order]
 
     news_coverage = dict(dataset.get("news_coverage") or {})
+    trained_nlp_pipeline = _normalize_nlp_pipeline(str(dataset.get("nlp_pipeline") or active_pipeline))
 
     _ml_log(f"stage: dataset ready | samples={Xn.shape[0]} | labels={len(y)}")
     runs.update_one(
@@ -1669,6 +1770,7 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
                 "stage": "dataset_ready",
                 "dataset_samples": int(Xn.shape[0]),
                 "news_coverage": news_coverage,
+                "nlp_pipeline": trained_nlp_pipeline,
             }
         },
     )
@@ -1736,6 +1838,7 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
     infos: List[MLModelInfo] = []
     for item in ranked:
         item["news_coverage"] = news_coverage
+        item["nlp_pipeline"] = trained_nlp_pipeline
         doc = _store_model_record(item, run_id=run_id)
         infos.append(_doc_to_model_info(doc))
 
@@ -1758,6 +1861,7 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
                     "trained_count": len(infos),
                     "selected_model_id": selection.selected_model_id,
                     "pruned_count": len(prune.deleted_model_ids),
+                    "nlp_pipeline": trained_nlp_pipeline,
                 },
             }
         },
