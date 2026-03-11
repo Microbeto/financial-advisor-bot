@@ -6,10 +6,12 @@ from typing import Optional
 import numpy as np
 
 
+# Shared contract for all meta-combiner strategies used in the ML workflow.
 class MetaCombiner(ABC):
     name: str = "meta_combiner"
 
     @abstractmethod
+    # Fit the combiner on historical base-model outputs and realized returns.
     def train(
         self,
         base_predictions: np.ndarray,
@@ -19,6 +21,7 @@ class MetaCombiner(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    # Estimate confidence scores for the current input row or basket.
     def predict_confidence(
         self,
         today_base_predictions: np.ndarray,
@@ -27,6 +30,7 @@ class MetaCombiner(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    # Convert model confidence into a target allocation vector.
     def allocate(
         self,
         today_base_predictions: np.ndarray,
@@ -35,6 +39,7 @@ class MetaCombiner(ABC):
     ) -> np.ndarray:
         raise NotImplementedError
 
+    # Consume realized outcomes so stateful combiners can update online.
     def step_update(
         self,
         actual_return: np.ndarray,
@@ -44,6 +49,7 @@ class MetaCombiner(ABC):
         del actual_return, realized_base_predictions, realized_market_features
 
 
+# Reduce a vector allocation to the first scalar weight for legacy call paths.
 def scalar_allocation(allocation: np.ndarray) -> float:
     vec = np.asarray(allocation, dtype=float).reshape(-1)
     if vec.size == 0:
@@ -51,6 +57,7 @@ def scalar_allocation(allocation: np.ndarray) -> float:
     return float(np.clip(vec[0], -1.0, 1.0))
 
 
+# Ensure allocation outputs are always a clipped 1D float vector.
 def normalize_allocation_vector(allocation: np.ndarray) -> np.ndarray:
     vec = np.asarray(allocation, dtype=float).reshape(-1)
     if vec.size == 0:
