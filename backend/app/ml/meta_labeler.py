@@ -30,6 +30,7 @@ class MetaLabelerCombiner(MetaCombiner):
         self._meta_feature_importances = np.array([], dtype=float)
 
     def _consensus_side(self, consensus_prob: np.ndarray) -> np.ndarray:
+        # Convert consensus probabilities to directional signals (1/-1/0 for long/short/abstain)
         p = np.asarray(consensus_prob, dtype=float)
         side = np.where(p >= 0.5, 1.0, -1.0)
         abstain = np.abs(p - 0.5) < self.side_threshold
@@ -37,6 +38,7 @@ class MetaLabelerCombiner(MetaCombiner):
         return side
 
     def train(self, base_predictions: np.ndarray, market_features: np.ndarray, actual_returns: np.ndarray) -> None:
+        # Train meta-model to assess and calibrate confidence in consensus predictions
         if base_predictions.ndim != 2:
             raise ValueError("base_predictions must be 2D")
 
@@ -101,6 +103,7 @@ class MetaLabelerCombiner(MetaCombiner):
             self._meta_model = raw_model
 
     def predict_confidence(self, today_base_predictions: np.ndarray, today_market_features: np.ndarray) -> np.ndarray:
+        # Generate calibrated confidence scores for today's predictions based on meta-model
         base_arr = np.asarray(today_base_predictions, dtype=float)
         market_arr = np.asarray(today_market_features, dtype=float)
 
@@ -141,6 +144,7 @@ class MetaLabelerCombiner(MetaCombiner):
         today_market_features: np.ndarray,
         current_allocation: np.ndarray | None = None,
     ) -> np.ndarray:
+        # Convert confidence scores and signals into normalized portfolio allocation weights
         del current_allocation
         confidence = np.asarray(self.predict_confidence(today_base_predictions, today_market_features), dtype=float).reshape(-1)
         if confidence.size == 0:
