@@ -12,6 +12,7 @@ import pytest
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.ml.meta_labeler import MetaLabelerCombiner
+from app.ml.meta_interface import scalar_allocation
 from app.ml.regime_switcher import RegimeSwitcherCombiner
 from app.ml.rl_agent import RLAgentCombiner
 from app.ml.tournament import run_walk_forward_tournament
@@ -70,7 +71,7 @@ def test_meta_combiners_allocate_float_in_range():
     models = [MetaLabelerCombiner(), RegimeSwitcherCombiner(), RLAgentCombiner()]
     for model in models:
         model.train(base, market, returns)
-        alloc = float(model.allocate(base[-1], market[-1]))
+        alloc = scalar_allocation(model.allocate(base[-1], market[-1], current_allocation=np.zeros(1, dtype=float)))
         assert -1.0 <= alloc <= 1.0
 
 
@@ -489,7 +490,7 @@ def test_regime_switcher_covid_crash_reduces_exposure(monkeypatch):
 
     vol = np.asarray(X[:, 3], dtype=float)
     stress_idx = int(np.argmax(vol))
-    alloc = float(model.allocate(base_predictions[stress_idx], X[stress_idx]))
+    alloc = scalar_allocation(model.allocate(base_predictions[stress_idx], X[stress_idx], current_allocation=np.zeros(1, dtype=float)))
 
     assert alloc < 0.2, (
         "Expected regime switcher to reduce exposure during COVID crash stress window "

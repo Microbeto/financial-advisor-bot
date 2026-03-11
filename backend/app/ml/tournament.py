@@ -5,7 +5,7 @@ from typing import Callable, Dict, List, Sequence, Tuple
 
 import numpy as np
 
-from .meta_interface import MetaCombiner
+from .meta_interface import MetaCombiner, scalar_allocation
 
 
 @dataclass
@@ -57,14 +57,29 @@ def run_walk_forward_tournament(
             fold_models.append(model)
             fold_names.append(model.name)
 
+        current_allocations: Dict[str, np.ndarray] = {
+            name: np.zeros(1, dtype=float) for name in fold_names
+        }
+
         for row_idx in te_idx:
             base_row = base_predictions[row_idx]
             market_row = market_features[row_idx]
             actual_ret = float(actual_returns[row_idx])
             for model, name in zip(fold_models, fold_names):
-                alloc = float(model.allocate(base_row, market_row))
+                alloc_vec = model.allocate(
+                    base_row,
+                    market_row,
+                    current_allocation=current_allocations.get(name),
+                )
+                current_allocations[name] = np.asarray(alloc_vec, dtype=float).reshape(-1)
+                alloc = scalar_allocation(alloc_vec)
                 ret = alloc * actual_ret
                 return_log[name].append(float(ret))
+                model.step_update(
+                    actual_return=np.array([actual_ret], dtype=float),
+                    realized_base_predictions=base_row,
+                    realized_market_features=market_row,
+                )
 
     stats: Dict[str, Dict[str, float]] = {}
     for name, vals in return_log.items():
