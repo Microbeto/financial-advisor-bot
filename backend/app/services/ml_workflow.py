@@ -20,6 +20,7 @@ from sklearn.svm import SVC
 
 from .. import db
 from ..ml.registry import get_meta_competitor_factories
+from ..ml.meta_interface import scalar_allocation
 from ..ml.tournament import run_walk_forward_tournament
 from ..core.utils import iso_date_utc
 from ..models import (
@@ -1364,8 +1365,11 @@ def _predict_tournament_model(model_bundle: Dict[str, Any], X: np.ndarray) -> np
 
     base_matrix = np.column_stack(cols)
     allocations: List[float] = []
+    current_alloc = np.zeros(1, dtype=float)
     for i in range(base_matrix.shape[0]):
-        alloc = float(combiner.allocate(base_matrix[i], X[i]))
+        alloc_vec = combiner.allocate(base_matrix[i], X[i], current_allocation=current_alloc)
+        current_alloc = np.asarray(alloc_vec, dtype=float).reshape(-1)
+        alloc = scalar_allocation(alloc_vec)
         allocations.append(float(np.clip(alloc, -1.0, 1.0)))
 
     alloc_arr = np.asarray(allocations, dtype=float)
@@ -1424,10 +1428,17 @@ def _train_multi_armed_tournament(
         splits=filtered_splits,
     )
 
-    allocations = np.asarray(
-        [float(tournament_result.winner_model.allocate(base_oof[i], X_market[i])) for i in range(base_oof.shape[0])],
-        dtype=float,
-    )
+    alloc_vals: List[float] = []
+    current_alloc = np.zeros(1, dtype=float)
+    for i in range(base_oof.shape[0]):
+        alloc_vec = tournament_result.winner_model.allocate(
+            base_oof[i],
+            X_market[i],
+            current_allocation=current_alloc,
+        )
+        current_alloc = np.asarray(alloc_vec, dtype=float).reshape(-1)
+        alloc_vals.append(scalar_allocation(alloc_vec))
+    allocations = np.asarray(alloc_vals, dtype=float)
     probs = np.clip((np.clip(allocations, -1.0, 1.0) + 1.0) / 2.0, 0.0, 1.0)
     preds = np.where(probs >= 0.5, 1, 0)
     metrics = _evaluate_binary(y_valid, preds, probs)
