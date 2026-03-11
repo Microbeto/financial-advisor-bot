@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import List
+import math
 
 import numpy as np
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import RandomForestClassifier
 
 from .meta_interface import MetaCombiner, normalize_allocation_vector
@@ -10,13 +11,30 @@ from .meta_interface import MetaCombiner, normalize_allocation_vector
 
 class MetaLabelerCombiner(MetaCombiner):
     name = "meta_labeler"
+    supports_cross_sectional = True
 
-    def __init__(self, random_state: int = 42, size_gain: float = 2.0) -> None:
+    def __init__(
+        self,
+        random_state: int = 42,
+        side_threshold: float = 0.02,
+        max_gross_exposure: float = 1.0,
+    ) -> None:
         self.random_state = int(random_state)
-        self.size_gain = float(max(0.1, size_gain))
-        self._models: List[RandomForestClassifier] = []
+        self.side_threshold = float(np.clip(side_threshold, 0.0, 0.25))
+        self.max_gross_exposure = float(max(0.0, max_gross_exposure))
+        self._meta_model: CalibratedClassifierCV | RandomForestClassifier | None = None
+        self._raw_model: RandomForestClassifier | None = None
+        self._fallback_confidence = 0.5
         self._n_bases = 0
-        self._last_direction = 0.0
+        self._last_side = np.zeros(1, dtype=float)
+        self._meta_feature_importances = np.array([], dtype=float)
+
+    def _consensus_side(self, consensus_prob: np.ndarray) -> np.ndarray:
+        p = np.asarray(consensus_prob, dtype=float)
+        side = np.where(p >= 0.5, 1.0, -1.0)
+        abstain = np.abs(p - 0.5) < self.side_threshold
+        side[abstain] = 0.0
+        return side
 
     def train(self, base_predictions: np.ndarray, market_features: np.ndarray, actual_returns: np.ndarray) -> None:
         if base_predictions.ndim != 2:
@@ -30,45 +48,92 @@ class MetaLabelerCombiner(MetaCombiner):
         if returns.shape[0] != n_samples:
             raise ValueError("actual_returns length mismatch")
 
-        features = np.column_stack([base_predictions, market_features])
-        outcome_sign = np.where(returns >= 0.0, 1, 0)
+        market = np.asarray(market_features, dtype=float)
+        if market.ndim != 2 or market.shape[0] != n_samples:
+            raise ValueError("market_features shape mismatch")
 
-        self._models = []
+        consensus_prob = np.mean(base_predictions, axis=1)
+        side = self._consensus_side(consensus_prob)
+        outcome_sign = np.where(returns >= 0.0, 1.0, -1.0)
+        labels = np.where(side == 0.0, 0, np.where(side == outcome_sign, 1, 0)).astype(int)
+
+        features = np.column_stack([side, consensus_prob, market])
+
         self._n_bases = n_bases
+        self._meta_model = None
+        self._raw_model = None
+        self._meta_feature_importances = np.array([], dtype=float)
 
-        for j in range(n_bases):
-            base_sign = np.where(base_predictions[:, j] >= 0.5, 1, 0)
-            labels = np.where(base_sign == outcome_sign, 1, 0)
+        uniq, counts = np.unique(labels, return_counts=True)
+        if uniq.size < 2:
+            self._fallback_confidence = float(np.clip(float(uniq[0]) if uniq.size == 1 else 0.5, 0.0, 1.0))
+            return
 
-            model = RandomForestClassifier(
-                n_estimators=180,
-                max_depth=6,
-                random_state=self.random_state + j,
-                class_weight="balanced",
-                n_jobs=-1,
+        min_class_count = int(np.min(counts)) if counts.size else 0
+
+        raw_model = RandomForestClassifier(
+            n_estimators=220,
+            max_depth=6,
+            random_state=self.random_state,
+            class_weight="balanced",
+            n_jobs=-1,
+        )
+        raw_model.fit(features, labels)
+        self._raw_model = raw_model
+        self._meta_feature_importances = np.asarray(raw_model.feature_importances_, dtype=float).reshape(-1)
+
+        cv_folds = min(3, min_class_count)
+        if cv_folds >= 2:
+            calibrated = CalibratedClassifierCV(
+                estimator=RandomForestClassifier(
+                    n_estimators=220,
+                    max_depth=6,
+                    random_state=self.random_state,
+                    class_weight="balanced",
+                    n_jobs=-1,
+                ),
+                method="sigmoid",
+                cv=int(cv_folds),
             )
-            model.fit(features, labels)
-            self._models.append(model)
+            calibrated.fit(features, labels)
+            self._meta_model = calibrated
+        else:
+            self._meta_model = raw_model
 
     def predict_confidence(self, today_base_predictions: np.ndarray, today_market_features: np.ndarray) -> np.ndarray:
-        if not self._models:
-            return np.zeros(1, dtype=float)
+        base_arr = np.asarray(today_base_predictions, dtype=float)
+        market_arr = np.asarray(today_market_features, dtype=float)
 
-        base_vec = np.asarray(today_base_predictions, dtype=float).reshape(-1)
-        market_vec = np.asarray(today_market_features, dtype=float).reshape(-1)
-        if base_vec.size != self._n_bases:
+        if base_arr.ndim == 1:
+            base_mat = base_arr.reshape(1, -1)
+        elif base_arr.ndim == 2:
+            base_mat = base_arr
+        else:
+            raise ValueError("today_base_predictions must be 1D or 2D")
+
+        if market_arr.ndim == 1:
+            market_mat = market_arr.reshape(1, -1)
+        elif market_arr.ndim == 2:
+            market_mat = market_arr
+        else:
+            raise ValueError("today_market_features must be 1D or 2D")
+
+        if base_mat.shape[0] != market_mat.shape[0]:
+            raise ValueError("Row count mismatch between base predictions and market features")
+        if self._n_bases and base_mat.shape[1] != self._n_bases:
             raise ValueError("Base prediction size mismatch")
 
-        feat = np.concatenate([base_vec, market_vec]).reshape(1, -1)
-        success_probs = np.array([m.predict_proba(feat)[0, 1] for m in self._models], dtype=float)
+        consensus_prob = np.mean(base_mat, axis=1)
+        side = self._consensus_side(consensus_prob)
+        self._last_side = np.asarray(side, dtype=float)
 
-        score_vec = (2.0 * base_vec) - 1.0
-        direction = float(np.dot(success_probs, score_vec) / max(1e-8, float(np.sum(success_probs))))
-        self._last_direction = float(np.clip(direction, -1.0, 1.0))
+        feat = np.column_stack([side, consensus_prob, market_mat])
+        if self._meta_model is None:
+            conf = np.full(feat.shape[0], self._fallback_confidence, dtype=float)
+        else:
+            conf = np.asarray(self._meta_model.predict_proba(feat)[:, 1], dtype=float)
 
-        raw_conf = float(np.dot(success_probs, np.abs(score_vec)) / max(1e-8, float(np.sum(np.abs(score_vec)))))
-        conf = float(np.clip(raw_conf, 0.0, 1.0))
-        return np.array([conf], dtype=float)
+        return np.clip(conf, 0.0, 1.0)
 
     def allocate(
         self,
@@ -77,8 +142,28 @@ class MetaLabelerCombiner(MetaCombiner):
         current_allocation: np.ndarray | None = None,
     ) -> np.ndarray:
         del current_allocation
-        confidence = self.predict_confidence(today_base_predictions, today_market_features)
-        conf = float(confidence[0]) if confidence.size else 0.5
-        magnitude = float(np.clip(np.tanh((conf - 0.5) * self.size_gain * 2.0), 0.0, 1.0))
-        alloc = magnitude * (1.0 if self._last_direction >= 0.0 else -1.0)
-        return normalize_allocation_vector(np.array([alloc], dtype=float))
+        confidence = np.asarray(self.predict_confidence(today_base_predictions, today_market_features), dtype=float).reshape(-1)
+        if confidence.size == 0:
+            return np.zeros(1, dtype=float)
+
+        p = np.clip(confidence, 1e-6, 1.0 - 1e-6)
+        z = (p - 0.5) / np.sqrt(p * (1.0 - p))
+        phi = 0.5 * (1.0 + np.vectorize(math.erf)(z / math.sqrt(2.0)))
+        magnitude = np.clip((2.0 * phi) - 1.0, 0.0, 1.0)
+
+        side = np.asarray(self._last_side, dtype=float).reshape(-1)
+        if side.size != magnitude.size:
+            side = np.ones_like(magnitude, dtype=float)
+        raw_alloc = side * magnitude
+
+        if raw_alloc.size > 1:
+            gross = float(np.sum(np.abs(raw_alloc)))
+            if gross > 1e-12 and self.max_gross_exposure > 0.0:
+                weights = (raw_alloc / gross) * self.max_gross_exposure
+            else:
+                weights = np.zeros_like(raw_alloc)
+            return normalize_allocation_vector(weights)
+
+        single = float(raw_alloc[0]) if raw_alloc.size else 0.0
+        single = float(np.clip(single, -self.max_gross_exposure, self.max_gross_exposure))
+        return normalize_allocation_vector(np.array([single], dtype=float))
