@@ -1005,7 +1005,24 @@ def get_model_feature_importances(model_id: Optional[str] = None) -> Dict[str, A
         winner_model = model_obj.get("winner_model")
         base_names = [str(x) for x in (model_obj.get("base_model_names") or []) if str(x)]
 
-        # MetaLabeler winner: average importances across per-base RF models.
+        # MetaLabeler winner: one calibrated meta-model with explicit consensus-side features.
+        vals = np.asarray(getattr(winner_model, "_meta_feature_importances", []), dtype=float).reshape(-1)
+        if vals.size:
+            labels: List[str] = ["consensus_side", "consensus_prob"]
+            rem = int(vals.shape[0]) - len(labels)
+            if rem > 0:
+                labels.extend(list(BASE_FEATURE_NAMES[:rem]))
+            if len(labels) < int(vals.shape[0]):
+                labels.extend([f"feature_{i}" for i in range(len(labels), int(vals.shape[0]))])
+
+            return {
+                "model_id": resolved_model_id,
+                "winner_name": winner_name,
+                "feature_labels": labels,
+                "feature_importances": [float(x) for x in vals.tolist()],
+            }
+
+        # Backward compatibility with older MetaLabeler bundle structure.
         models = getattr(winner_model, "_models", None)
         if isinstance(models, list) and models:
             rows: List[np.ndarray] = []
@@ -1017,21 +1034,13 @@ def get_model_feature_importances(model_id: Optional[str] = None) -> Dict[str, A
             if rows:
                 min_len = min(int(r.shape[0]) for r in rows)
                 mat = np.vstack([r[:min_len] for r in rows])
-                vals = np.mean(mat, axis=0)
-
-                n_base = min(len(base_names), int(vals.shape[0]))
-                labels = [f"base_pred_{name}" for name in base_names[:n_base]]
-                rem = int(vals.shape[0]) - n_base
-                if rem > 0:
-                    labels.extend(list(BASE_FEATURE_NAMES[:rem]))
-                if len(labels) < int(vals.shape[0]):
-                    labels.extend([f"feature_{i}" for i in range(len(labels), int(vals.shape[0]))])
-
+                legacy_vals = np.mean(mat, axis=0)
+                labels = [f"feature_{i}" for i in range(int(legacy_vals.shape[0]))]
                 return {
                     "model_id": resolved_model_id,
                     "winner_name": winner_name,
                     "feature_labels": labels,
-                    "feature_importances": [float(x) for x in vals.tolist()],
+                    "feature_importances": [float(x) for x in legacy_vals.tolist()],
                 }
 
         # Fallback if winner itself exposes importances.
@@ -1364,15 +1373,23 @@ def _predict_tournament_model(model_bundle: Dict[str, Any], X: np.ndarray) -> np
         cols.append(_predict_proba_or_hard(m, X))
 
     base_matrix = np.column_stack(cols)
-    allocations: List[float] = []
-    current_alloc = np.zeros(1, dtype=float)
-    for i in range(base_matrix.shape[0]):
-        alloc_vec = combiner.allocate(base_matrix[i], X[i], current_allocation=current_alloc)
-        current_alloc = np.asarray(alloc_vec, dtype=float).reshape(-1)
-        alloc = scalar_allocation(alloc_vec)
-        allocations.append(float(np.clip(alloc, -1.0, 1.0)))
+    if bool(getattr(combiner, "supports_cross_sectional", False)):
+        current_alloc = np.zeros(base_matrix.shape[0], dtype=float)
+        alloc_vec = combiner.allocate(base_matrix, X, current_allocation=current_alloc)
+        alloc_arr = np.asarray(alloc_vec, dtype=float).reshape(-1)
+        if alloc_arr.size != base_matrix.shape[0]:
+            raise RuntimeError("Tournament combiner returned invalid cross-sectional allocation shape")
+        alloc_arr = np.clip(alloc_arr, -1.0, 1.0)
+    else:
+        allocations: List[float] = []
+        current_alloc = np.zeros(1, dtype=float)
+        for i in range(base_matrix.shape[0]):
+            alloc_vec = combiner.allocate(base_matrix[i], X[i], current_allocation=current_alloc)
+            current_alloc = np.asarray(alloc_vec, dtype=float).reshape(-1)
+            alloc = scalar_allocation(alloc_vec)
+            allocations.append(float(np.clip(alloc, -1.0, 1.0)))
+        alloc_arr = np.asarray(allocations, dtype=float)
 
-    alloc_arr = np.asarray(allocations, dtype=float)
     return np.clip((alloc_arr + 1.0) / 2.0, 0.0, 1.0)
 
 
