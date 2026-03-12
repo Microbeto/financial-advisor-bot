@@ -35,13 +35,18 @@ class GenerativeIntelligence:
             self.client.list(),
             timeout=max(0.2, float(OLLAMA_HEALTH_TIMEOUT_SEC)),
         )
-        models = payload.get("models", []) if isinstance(payload, dict) else []
+        if isinstance(payload, dict):
+            models = payload.get("models", [])
+        else:
+            models = getattr(payload, "models", [])
         out: list[str] = []
         for item in models:
-            if not isinstance(item, dict):
-                continue
-            for key in ("name", "model"):
-                name = str(item.get(key) or "").strip()
+            if isinstance(item, dict):
+                names = [item.get("name"), item.get("model")]
+            else:
+                names = [getattr(item, "name", None), getattr(item, "model", None)]
+            for raw in names:
+                name = str(raw or "").strip()
                 if name and name not in out:
                     out.append(name)
         return out
@@ -123,7 +128,15 @@ class GenerativeIntelligence:
                 timeout=max(0.5, float(OLLAMA_SUMMARY_TIMEOUT_SEC)),
             )
             # Return the model text as a compact display-ready summary.
-            return response['message']['content'].strip()
+            if isinstance(response, dict):
+                content = str(response.get("message", {}).get("content", "") or "").strip()
+            else:
+                msg = getattr(response, "message", None)
+                if isinstance(msg, dict):
+                    content = str(msg.get("content", "") or "").strip()
+                else:
+                    content = str(getattr(msg, "content", "") or "").strip()
+            return content or "Market summary unavailable because local inference returned empty output."
 
         except asyncio.TimeoutError:
             logger.warning("Local LLM market summary timed out after %.2fs", max(0.5, float(OLLAMA_SUMMARY_TIMEOUT_SEC)))
@@ -171,7 +184,14 @@ class GenerativeIntelligence:
                 timeout=max(0.5, float(OLLAMA_GLOSSARY_TIMEOUT_SEC)),
             )
             # Normalize the response payload and return None for empty outputs.
-            out = str(response.get("message", {}).get("content", "") or "").strip()
+            if isinstance(response, dict):
+                out = str(response.get("message", {}).get("content", "") or "").strip()
+            else:
+                msg = getattr(response, "message", None)
+                if isinstance(msg, dict):
+                    out = str(msg.get("content", "") or "").strip()
+                else:
+                    out = str(getattr(msg, "content", "") or "").strip()
             return out or None
         except asyncio.TimeoutError:
             logger.warning("Local LLM glossary generation timed out after %.2fs", max(0.5, float(OLLAMA_GLOSSARY_TIMEOUT_SEC)))
