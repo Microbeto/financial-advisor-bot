@@ -36,6 +36,8 @@ type RequestOptions = {
   cache?: RequestCache;
   timeoutMs?: number;
   userId?: string;
+  omitStoredAuth?: boolean;
+  omitStoredUserId?: boolean;
   retry?: {
     attempts?: number; // total attempts (including first)
     baseDelayMs?: number;
@@ -106,16 +108,21 @@ function userScopedKey(baseKey: string, userId?: string): string {
   return `${baseKey}:${uid}`;
 }
 
-function buildHeaders(extra?: Record<string, string>, userId?: string) {
+function buildHeaders(
+  extra?: Record<string, string>,
+  userId?: string,
+  omitStoredAuth = false,
+  omitStoredUserId = false
+) {
   const h: Record<string, string> = {
     "Content-Type": "application/json",
     ...(extra || {}),
   };
 
-  const token = getStoredToken();
+  const token = omitStoredAuth ? undefined : getStoredToken();
   if (token) h["Authorization"] = `Bearer ${token}`;
 
-  const effectiveUserId = userId ?? getStoredUserId();
+  const effectiveUserId = userId ?? (omitStoredUserId ? undefined : getStoredUserId());
   if (effectiveUserId) h["X-User-Id"] = effectiveUserId;
 
   return h;
@@ -165,7 +172,7 @@ async function requestOnce<T>(url: string, opts: RequestOptions): Promise<T> {
   try {
     const res = await fetch(url, {
       method: opts.method ?? "GET",
-      headers: buildHeaders(opts.headers, opts.userId),
+      headers: buildHeaders(opts.headers, opts.userId, opts.omitStoredAuth, opts.omitStoredUserId),
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
       cache: opts.cache ?? "no-store",
       signal: controller.signal,
@@ -393,6 +400,8 @@ export async function getDailySignals(userId?: string, force = false) {
   const qs = force ? "?force=true" : "";
   return request<DailySignals>(`/signals/today${qs}`, {
     userId,
+    omitStoredAuth: true,
+    omitStoredUserId: true,
     // This call can be slow if backend is fetching prices/news.
     timeoutMs: 90000,
     retry: {
@@ -407,6 +416,8 @@ export async function getDailySignals(userId?: string, force = false) {
 /** Dashboard */
 export async function getDashboardPublic() {
   return request<DashboardResponse>("/dashboard/public", {
+    omitStoredAuth: true,
+    omitStoredUserId: true,
     timeoutMs: 90000,
     retry: { attempts: 3, baseDelayMs: 400, maxDelayMs: 3000 },
   });
