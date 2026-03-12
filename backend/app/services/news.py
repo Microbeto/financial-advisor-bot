@@ -54,6 +54,12 @@ NEWS_ENABLE_YAHOO_RSS_FALLBACK = os.getenv("NEWS_ENABLE_YAHOO_RSS_FALLBACK", "1"
     "off",
 )
 NEWS_MAX_ITEMS_RSS_PER_SYMBOL = int(os.getenv("NEWS_MAX_ITEMS_RSS_PER_SYMBOL", "8"))
+NEWS_REFRESH_LOG_ENABLED = os.getenv("NEWS_REFRESH_LOG_ENABLED", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
 
 # Fallback seed symbols if you have zero symbols available
 NEWS_DEFAULT_SEED = os.getenv(
@@ -95,6 +101,20 @@ _NEGATIVE = [
 ]
 
 NEWS_CASCADE_LEXICON_ABS_THRESHOLD = float(os.getenv("NEWS_CASCADE_LEXICON_ABS_THRESHOLD", "2.0"))
+_NEWS_REFRESH_STATS: Dict[str, int] = {"hit": 0, "miss": 0, "disabled": 0}
+
+
+def _log_refresh_stats(path: str, date: str, symbols_count: int, item_count: int) -> None:
+    if not NEWS_REFRESH_LOG_ENABLED:
+        return
+    _log(
+        "INFO",
+        (
+            "refresh_stats "
+            f"path={path} date={date} symbols={symbols_count} items={item_count} "
+            f"totals(hit={_NEWS_REFRESH_STATS['hit']}, miss={_NEWS_REFRESH_STATS['miss']}, disabled={_NEWS_REFRESH_STATS['disabled']})"
+        ),
+    )
 
 
 class _NewsFinBertInferencer:
@@ -720,6 +740,8 @@ async def refresh_news_if_needed(date: str, symbols: List[str]) -> List[NewsItem
     - Respect TTL so you don't refetch constantly
     """
     if not NEWS_ENABLED:
+        _NEWS_REFRESH_STATS["disabled"] += 1
+        _log_refresh_stats(path="disabled", date=str(date or ""), symbols_count=int(len(symbols or [])), item_count=0)
         return []
 
     date = str(date or "").strip() or _utc_day_key()
@@ -727,7 +749,10 @@ async def refresh_news_if_needed(date: str, symbols: List[str]) -> List[NewsItem
 
     # Fresh cache: just read
     if _cache_is_fresh(date, NEWS_CACHE_TTL_HOURS):
-        return get_news_for_date(date, symbols=syms, limit=NEWS_DB_LIMIT, include_market=True)
+        cached = get_news_for_date(date, symbols=syms, limit=NEWS_DB_LIMIT, include_market=True)
+        _NEWS_REFRESH_STATS["hit"] += 1
+        _log_refresh_stats(path="cache_hit", date=date, symbols_count=int(len(syms)), item_count=int(len(cached)))
+        return cached
 
     # Not fresh: fetch
     _log("INFO", f"refresh needed date={date} mode={NEWS_PREFETCH_MODE}")
@@ -740,7 +765,10 @@ async def refresh_news_if_needed(date: str, symbols: List[str]) -> List[NewsItem
         await refresh_market_news(date)
         await refresh_news_for_symbols(date, syms)
 
-    return get_news_for_date(date, symbols=syms, limit=NEWS_DB_LIMIT, include_market=True)
+    refreshed = get_news_for_date(date, symbols=syms, limit=NEWS_DB_LIMIT, include_market=True)
+    _NEWS_REFRESH_STATS["miss"] += 1
+    _log_refresh_stats(path="cache_miss_fetch", date=date, symbols_count=int(len(syms)), item_count=int(len(refreshed)))
+    return refreshed
 
 
 async def refresh_top_news_of_day(date: str, symbols: Optional[List[str]] = None) -> List[NewsItem]:
