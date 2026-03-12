@@ -11,7 +11,7 @@ from ..core.utils import iso_date_utc
 from ..engine.glossary import lingo_glossary
 from ..engine.llm_service import GenerativeIntelligence
 from ..ml.model_router import intelligence_router
-from .news import refresh_top_news_of_day, get_news_for_date
+from .news import refresh_news_if_needed, refresh_top_news_of_day, get_news_for_date
 from .symbols import resolve_symbol_name
 from .universe import get_universe_for_date, get_user_custom_universe, save_universe_for_date
 from .risk import ensure_risk_profile_for_user, get_risk_profile_for_user
@@ -325,6 +325,18 @@ def _take_top_unique(items: List[TrendItem], want: int, used: set[str]) -> List[
     return out
 
 
+def _symbols_from_cached_signal_payload(sig: Dict[str, Any]) -> List[str]:
+    symbols: List[str] = []
+    for key in ("sp500_up", "sp500_down", "dow_up", "dow_down"):
+        for row in list(sig.get(key) or []):
+            if not isinstance(row, dict):
+                continue
+            sym = str(row.get("symbol") or "").upper().strip()
+            if sym:
+                symbols.append(sym)
+    return list(dict.fromkeys(symbols))
+
+
 async def _fill_names_for_items(items: List[TrendItem]) -> None:
     async def one(it: TrendItem) -> None:
         try:
@@ -346,6 +358,10 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
         cached.pop("_id", None)
         cached.pop("user_id", None)
         if _is_doc_fresh(cached, DASH_CACHE_TTL_SEC):
+            cached_symbols = _symbols_from_cached_signal_payload(cached)
+            await _maybe_await(refresh_news_if_needed(today, cached_symbols))
+            refreshed_top_news = await _maybe_await(refresh_top_news_of_day(today, symbols=cached_symbols)) or []
+            cached["top_news"] = [x.model_dump() for x in refreshed_top_news]
             cached["system_capability"] = capability
             cached["llm_summary_enabled"] = llm_summary_enabled
             if llm_summary_enabled and not cached.get("market_summary"):
@@ -368,9 +384,9 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
 
     sig = _read_cached_signals(user_id, today)
     if sig and _is_doc_fresh(sig, SIGNALS_CACHE_TTL_SEC):
-        top_news = sig.get("top_news")
-        if top_news is None:
-            top_news = await _maybe_await(refresh_top_news_of_day(today)) or []
+        cached_symbols = _symbols_from_cached_signal_payload(sig)
+        await _maybe_await(refresh_news_if_needed(today, cached_symbols))
+        top_news = await _maybe_await(refresh_top_news_of_day(today, symbols=cached_symbols)) or []
 
         market_summary = str(sig.get("market_summary") or "").strip() or None
         if llm_summary_enabled and not market_summary:
@@ -431,6 +447,9 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
     sp500_allowed = _cap_symbols(role, sp500_allowed)
     dow_allowed = _cap_symbols(role, dow_allowed)
 
+    # Ensure today's news is refreshed and persisted before computing trend scores.
+    await _maybe_await(refresh_news_if_needed(today, sp500_allowed + dow_allowed))
+
     sp_ranked = await _rank_trends(today, sp500_allowed, closes_map)
     dw_ranked = await _rank_trends(today, dow_allowed, closes_map)
 
@@ -447,7 +466,7 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
 
     await _fill_names_for_items(sp_up + sp_down + dw_up + dw_down)
 
-    top_news = await _maybe_await(refresh_top_news_of_day(today))
+    top_news = await _maybe_await(refresh_top_news_of_day(today, symbols=sp500_allowed + dow_allowed))
     if top_news is None:
         top_news = []
 
