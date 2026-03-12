@@ -759,6 +759,7 @@ def create_app() -> FastAPI:
             ml_winner_name=fi.get("winner_name"),
             ml_feature_labels=list(fi.get("feature_labels") or []),
             ml_feature_importances=[float(x) for x in (fi.get("feature_importances") or [])],
+            news_refresh_stats=getattr(dash, "news_refresh_stats", None),
         )
 
     @app.get("/market/annotated/{symbol}", response_model=AnnotatedHistoryResponse)
