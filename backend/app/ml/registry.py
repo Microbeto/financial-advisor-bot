@@ -68,12 +68,22 @@ def get_meta_competitor_factories(random_seed: int = 42) -> List[Callable[[], Me
         _regime_factory(2.0, 40,  "regime_switcher_cool"),  # smooth, long memory
     ]
 
-    # RLAgent grid: vary learning_rate, temperature, gamma horizon, and turnover penalty
-    # Lower gamma is myopic/reactive; higher gamma values longer-run continuation value
+    # RLAgent grid (9 variants): speed/exploration × horizon/friction profiles
+    # This gives tournament selection room to discover regime-specific RL behavior.
+    rl_specs = [
+        (0.01, 0.5, 0.85, 0.0005, "rl_agent_slow_short_lc"),
+        (0.01, 0.5, 0.95, 0.0010, "rl_agent_slow_mid_mc"),
+        (0.01, 0.5, 0.99, 0.0020, "rl_agent_slow_long_hc"),
+        (0.05, 0.8, 0.85, 0.0005, "rl_agent_base_short_lc"),
+        (0.05, 0.8, 0.95, 0.0010, "rl_agent_base_mid_mc"),
+        (0.05, 0.8, 0.99, 0.0020, "rl_agent_base_long_hc"),
+        (0.10, 1.2, 0.85, 0.0005, "rl_agent_fast_short_lc"),
+        (0.10, 1.2, 0.95, 0.0010, "rl_agent_fast_mid_mc"),
+        (0.10, 1.2, 0.99, 0.0020, "rl_agent_fast_long_hc"),
+    ]
     rl_agent_factories = [
-        _rl_factory(0.01, 0.5, 0.85, 0.0005, "rl_agent_slow_short"),
-        _rl_factory(0.05, 0.8, 0.95, 0.0010, "rl_agent_base_balanced"),
-        _rl_factory(0.10, 1.2, 0.99, 0.0020, "rl_agent_fast_long"),
+        _rl_factory(lr, temp, gamma, cost, label)
+        for lr, temp, gamma, cost, label in rl_specs
     ]
 
     # GrandEnsemble: blends one default of each combiner, dynamically re-weighted by realized PnL

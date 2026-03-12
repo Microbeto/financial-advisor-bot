@@ -21,12 +21,14 @@ import {
   adminUpdateRateLimit,
   adminUpdateUserRole,
   getDailySignals,
+  getMlTournamentStats,
   getMlRuntimeSettings,
   updateMlRuntimeSettings,
 } from "@/lib/api-client";
 import type {
   AccountStatus,
   AdminUserDetail,
+  MLTournamentStatsResponse,
   MLRuntimeSettings,
   SignalTopItem,
   UserPublic,
@@ -65,6 +67,7 @@ export default function AdminPage() {
   const [mlSaving, setMlSaving] = useState(false);
   const [mlMessage, setMlMessage] = useState<string | null>(null);
   const [mlError, setMlError] = useState<string | null>(null);
+  const [mlTournament, setMlTournament] = useState<MLTournamentStatsResponse | null>(null);
 
   const [cacheStats, setCacheStats] = useState<Record<string, unknown> | null>(null);
   const [routerDiagnostics, setRouterDiagnostics] = useState<Record<string, unknown> | null>(null);
@@ -106,6 +109,10 @@ export default function AdminPage() {
           adminGetCacheStats(),
         ]);
 
+        const tournamentStats = await getMlTournamentStats(
+          typeof signals.ml_model_id === "string" ? signals.ml_model_id : undefined
+        );
+
         const routerDiag = await adminGetRouterDiagnostics(false);
 
         if (cancelled) return;
@@ -127,6 +134,7 @@ export default function AdminPage() {
         setUsers(userRes.items || []);
         setMlSettings(settings);
         setMlDraft(settings);
+        setMlTournament(tournamentStats);
         setCacheStats(cache);
         setRouterDiagnostics(routerDiag as unknown as Record<string, unknown>);
       } catch (err) {
@@ -444,6 +452,9 @@ export default function AdminPage() {
       : statusCapability === "medium"
       ? "border-amber-700 bg-amber-900/40 text-amber-200"
       : "border-rose-700 bg-rose-900/40 text-rose-200";
+  const tournamentRows = Object.entries(mlTournament?.competitor_stats || {}).sort(
+    (a, b) => Number(b[1]?.sharpe || 0) - Number(a[1]?.sharpe || 0)
+  );
 
   return (
     <div className="space-y-5">
@@ -607,6 +618,59 @@ export default function AdminPage() {
             Save basket
           </button>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 text-xs">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="text-[11px] text-slate-300">Tournament Competitor Sharpe</div>
+          <div className="text-[11px] text-slate-400">
+            Winner: {mlTournament?.winner_name || "-"} | Model: {mlTournament?.model_id || "-"}
+          </div>
+        </div>
+
+        {tournamentRows.length === 0 ? (
+          <p className="text-[11px] text-slate-300">No tournament stats available yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full table-auto text-left text-[11px]">
+              <thead>
+                <tr className="border-b border-slate-700 bg-slate-900/80 text-slate-300">
+                  <th className="px-2 py-1">Competitor</th>
+                  <th className="px-2 py-1">Sharpe</th>
+                  <th className="px-2 py-1">Max DD</th>
+                  <th className="px-2 py-1">Mean Return</th>
+                  <th className="px-2 py-1">Volatility</th>
+                  <th className="px-2 py-1">Samples</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tournamentRows.map(([name, stat], idx) => {
+                  const isWinner = name === mlTournament?.winner_name;
+                  const isRl = name.startsWith("rl_agent");
+                  return (
+                    <tr
+                      key={name}
+                      className={[
+                        "border-b border-slate-800/80",
+                        isWinner ? "bg-emerald-950/20" : idx % 2 ? "bg-slate-900/20" : "",
+                      ].join(" ")}
+                    >
+                      <td className="px-2 py-1 font-mono text-slate-100">
+                        {name}
+                        {isRl ? <span className="ml-2 text-[10px] text-sky-300">RL</span> : null}
+                      </td>
+                      <td className="px-2 py-1 text-slate-200">{Number(stat.sharpe || 0).toFixed(4)}</td>
+                      <td className="px-2 py-1 text-slate-300">{Number(stat.max_drawdown || 0).toFixed(4)}</td>
+                      <td className="px-2 py-1 text-slate-300">{Number(stat.mean_return || 0).toFixed(5)}</td>
+                      <td className="px-2 py-1 text-slate-300">{Number(stat.volatility || 0).toFixed(5)}</td>
+                      <td className="px-2 py-1 text-slate-300">{Number(stat.sample_count || 0).toFixed(0)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 text-xs">
