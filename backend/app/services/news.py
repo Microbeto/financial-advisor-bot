@@ -117,6 +117,15 @@ def _log_refresh_stats(path: str, date: str, symbols_count: int, item_count: int
     )
 
 
+def get_news_refresh_stats() -> Dict[str, int]:
+    # Return a safe copy so callers cannot mutate internal counters directly.
+    return {
+        "hit": int(_NEWS_REFRESH_STATS.get("hit", 0)),
+        "miss": int(_NEWS_REFRESH_STATS.get("miss", 0)),
+        "disabled": int(_NEWS_REFRESH_STATS.get("disabled", 0)),
+    }
+
+
 class _NewsFinBertInferencer:
     def __init__(self) -> None:
         self._ready = False
