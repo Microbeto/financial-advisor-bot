@@ -187,6 +187,12 @@ class SignalItem(BaseModel):
     link: Optional[str] = None
 
 
+class NewsRefreshStats(BaseModel):
+    hit: int = 0
+    miss: int = 0
+    disabled: int = 0
+
+
 class SignalsToday(BaseModel):
     date: str
     top_up: List[SignalItem] = Field(default_factory=list)
@@ -201,6 +207,7 @@ class SignalsToday(BaseModel):
     ml_winner_name: Optional[str] = None
     ml_feature_labels: List[str] = Field(default_factory=list)
     ml_feature_importances: List[float] = Field(default_factory=list)
+    news_refresh_stats: NewsRefreshStats = Field(default_factory=NewsRefreshStats)
 
 
 class MarketBar(BaseModel):
@@ -276,6 +283,7 @@ class DashboardResponse(BaseModel):
     system_capability: Literal["low", "medium", "high"] = "low"
     llm_summary_enabled: bool = False
     market_summary: Optional[str] = None
+    news_refresh_stats: NewsRefreshStats = Field(default_factory=NewsRefreshStats)
     glossary: Dict[str, str] = Field(default_factory=dict)
 
 
