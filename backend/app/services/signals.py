@@ -11,7 +11,7 @@ from ..core.utils import iso_date_utc
 from ..engine.glossary import lingo_glossary
 from ..engine.llm_service import GenerativeIntelligence
 from ..ml.model_router import intelligence_router
-from .news import refresh_news_if_needed, refresh_top_news_of_day, get_news_for_date
+from .news import get_news_refresh_stats, refresh_news_if_needed, refresh_top_news_of_day, get_news_for_date
 from .symbols import resolve_symbol_name
 from .universe import get_universe_for_date, get_user_custom_universe, save_universe_for_date
 from .risk import ensure_risk_profile_for_user, get_risk_profile_for_user
@@ -362,6 +362,7 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
             await _maybe_await(refresh_news_if_needed(today, cached_symbols))
             refreshed_top_news = await _maybe_await(refresh_top_news_of_day(today, symbols=cached_symbols)) or []
             cached["top_news"] = [x.model_dump() for x in refreshed_top_news]
+            cached["news_refresh_stats"] = get_news_refresh_stats()
             cached["system_capability"] = capability
             cached["llm_summary_enabled"] = llm_summary_enabled
             if llm_summary_enabled and not cached.get("market_summary"):
@@ -403,6 +404,7 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
             system_capability=capability,  # type: ignore[arg-type]
             llm_summary_enabled=llm_summary_enabled,
             market_summary=market_summary,
+            news_refresh_stats=get_news_refresh_stats(),
             glossary=lingo_glossary(),
         )
 
@@ -483,6 +485,7 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
         "system_capability": capability,
         "llm_summary_enabled": llm_summary_enabled,
         "market_summary": market_summary,
+        "news_refresh_stats": get_news_refresh_stats(),
         "cached_at": _utc_iso_z(datetime.now(timezone.utc)),
     }
     _write_cached_signals(user_id, today, signals_payload)
@@ -498,6 +501,7 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
         system_capability=capability,  # type: ignore[arg-type]
         llm_summary_enabled=llm_summary_enabled,
         market_summary=market_summary,
+        news_refresh_stats=get_news_refresh_stats(),
         glossary=lingo_glossary(),
     )
 
