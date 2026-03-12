@@ -8,6 +8,10 @@ import numpy as np
 from .meta_interface import MetaCombiner, scalar_allocation
 
 
+DEFAULT_TRANSACTION_COST_RATE = 0.001
+DEFAULT_ANNUAL_RISK_FREE_RATE = 0.04
+
+
 @dataclass
 class TournamentResult:
     winner_name: str
@@ -22,7 +26,9 @@ def _sharpe_ratio(returns: np.ndarray) -> float:
     std = float(np.std(returns, ddof=1))
     if std <= 1e-12:
         return 0.0
-    return float((np.mean(returns) / std) * np.sqrt(252.0))
+    daily_rf = float(DEFAULT_ANNUAL_RISK_FREE_RATE / 252.0)
+    excess_mean = float(np.mean(returns) - daily_rf)
+    return float((excess_mean / std) * np.sqrt(252.0))
 
 
 def _max_drawdown(returns: np.ndarray) -> float:
@@ -34,6 +40,31 @@ def _max_drawdown(returns: np.ndarray) -> float:
     return float(np.min(drawdowns))
 
 
+def _is_stateful_competitor(model: MetaCombiner) -> bool:
+    return type(model).step_update is not MetaCombiner.step_update
+
+
+def _warm_up_online_state(
+    model: MetaCombiner,
+    base_predictions: np.ndarray,
+    market_features: np.ndarray,
+    actual_returns: np.ndarray,
+) -> None:
+    current_allocation = np.zeros(1, dtype=float)
+    for row_idx in range(base_predictions.shape[0]):
+        alloc_vec = model.allocate(
+            base_predictions[row_idx],
+            market_features[row_idx],
+            current_allocation=current_allocation,
+        )
+        current_allocation = np.asarray(alloc_vec, dtype=float).reshape(-1)
+        model.step_update(
+            actual_return=np.array([float(actual_returns[row_idx])], dtype=float),
+            realized_base_predictions=base_predictions[row_idx],
+            realized_market_features=market_features[row_idx],
+        )
+
+
 def run_walk_forward_tournament(
     competitor_factories: Sequence[Callable[[], MetaCombiner]],
     base_predictions: np.ndarray,
@@ -41,45 +72,88 @@ def run_walk_forward_tournament(
     actual_returns: np.ndarray,
     splits: List[Tuple[np.ndarray, np.ndarray]],
 ) -> TournamentResult:
-    competitor_names = [factory().name for factory in competitor_factories]
+    seeded_models = [factory() for factory in competitor_factories]
+    competitor_names = [model.name for model in seeded_models]
+    stateful_flags = {
+        model.name: _is_stateful_competitor(model)
+        for model in seeded_models
+    }
+    persistent_models = {
+        model.name: model
+        for model in seeded_models
+        if stateful_flags.get(model.name, False)
+    }
+    persistent_allocations: Dict[str, np.ndarray] = {
+        name: np.zeros(1, dtype=float)
+        for name in competitor_names
+        if stateful_flags.get(name, False)
+    }
+    initialized_stateful: set[str] = set()
     return_log: Dict[str, List[float]] = {name: [] for name in competitor_names}
 
-    for tr_idx, te_idx in splits:
+    ordered_splits = sorted(
+        splits,
+        key=lambda pair: int(pair[1][0]) if len(pair[1]) else int(pair[0][0]),
+    )
+
+    for tr_idx, te_idx in ordered_splits:
         x_train_base = base_predictions[tr_idx]
         x_train_market = market_features[tr_idx]
         y_train_ret = actual_returns[tr_idx]
 
         fold_models: List[MetaCombiner] = []
         fold_names: List[str] = []
-        for factory in competitor_factories:
-            model = factory()
-            model.train(x_train_base, x_train_market, y_train_ret)
+        current_allocations: Dict[str, np.ndarray] = {}
+        for seeded_model, factory in zip(seeded_models, competitor_factories):
+            name = seeded_model.name
+            if stateful_flags.get(name, False):
+                model = persistent_models[name]
+                if name not in initialized_stateful:
+                    model.train(x_train_base, x_train_market, y_train_ret)
+                    initialized_stateful.add(name)
+                current_allocations[name] = np.asarray(
+                    persistent_allocations.get(name, np.zeros(1, dtype=float)),
+                    dtype=float,
+                ).reshape(-1)
+            else:
+                model = factory()
+                model.train(x_train_base, x_train_market, y_train_ret)
+                current_allocations[name] = np.zeros(1, dtype=float)
             fold_models.append(model)
-            fold_names.append(model.name)
-
-        current_allocations: Dict[str, np.ndarray] = {
-            name: np.zeros(1, dtype=float) for name in fold_names
-        }
+            fold_names.append(name)
 
         for row_idx in te_idx:
             base_row = base_predictions[row_idx]
             market_row = market_features[row_idx]
             actual_ret = float(actual_returns[row_idx])
             for model, name in zip(fold_models, fold_names):
+                prev_alloc_vec = np.asarray(
+                    current_allocations.get(name, np.zeros(1, dtype=float)),
+                    dtype=float,
+                ).reshape(-1)
+                prev_alloc = scalar_allocation(prev_alloc_vec)
                 alloc_vec = model.allocate(
                     base_row,
                     market_row,
-                    current_allocation=current_allocations.get(name),
+                    current_allocation=prev_alloc_vec,
                 )
                 current_allocations[name] = np.asarray(alloc_vec, dtype=float).reshape(-1)
                 alloc = scalar_allocation(alloc_vec)
-                ret = alloc * actual_ret
+                turnover = abs(alloc - prev_alloc)
+                ret = (alloc * actual_ret) - (DEFAULT_TRANSACTION_COST_RATE * turnover)
                 return_log[name].append(float(ret))
                 model.step_update(
                     actual_return=np.array([actual_ret], dtype=float),
                     realized_base_predictions=base_row,
                     realized_market_features=market_row,
                 )
+
+        for name in fold_names:
+            if stateful_flags.get(name, False):
+                persistent_allocations[name] = np.asarray(
+                    current_allocations.get(name, np.zeros(1, dtype=float)),
+                    dtype=float,
+                ).reshape(-1)
 
     stats: Dict[str, Dict[str, float]] = {}
     for name, vals in return_log.items():
@@ -109,6 +183,8 @@ def run_walk_forward_tournament(
         winner_model = competitor_factories[0]()
 
     winner_model.train(base_predictions, market_features, actual_returns)
+    if _is_stateful_competitor(winner_model):
+        _warm_up_online_state(winner_model, base_predictions, market_features, actual_returns)
     return TournamentResult(
         winner_name=winner_name,
         winner_model=winner_model,
