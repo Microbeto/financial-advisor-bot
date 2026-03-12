@@ -495,6 +495,10 @@ export default function DashboardPage() {
       : "low";
   const llmSummaryEnabled = Boolean(signals?.llm_summary_enabled);
   const marketSummary = typeof signals?.market_summary === "string" ? signals.market_summary.trim() : "";
+  const refreshStats = signals?.news_refresh_stats;
+  const refreshHit = Number.isFinite(Number(refreshStats?.hit)) ? Number(refreshStats?.hit) : 0;
+  const refreshMiss = Number.isFinite(Number(refreshStats?.miss)) ? Number(refreshStats?.miss) : 0;
+  const refreshDisabled = Number.isFinite(Number(refreshStats?.disabled)) ? Number(refreshStats?.disabled) : 0;
   const mlModelId = typeof signals?.ml_model_id === "string" ? signals.ml_model_id : null;
   const mlWinner = typeof signals?.ml_winner_name === "string" ? signals.ml_winner_name : null;
   const mlLabels = Array.isArray(signals?.ml_feature_labels)
@@ -524,6 +528,11 @@ export default function DashboardPage() {
               Regime: <span className="text-slate-200">{regime}</span>
             </div>
           ) : null}
+          <div>
+            News refresh: <span className="text-slate-200">hit {refreshHit}</span>,{" "}
+            <span className="text-slate-200">miss {refreshMiss}</span>,{" "}
+            <span className="text-slate-200">disabled {refreshDisabled}</span>
+          </div>
         </div>
 
         <div className="mt-3">

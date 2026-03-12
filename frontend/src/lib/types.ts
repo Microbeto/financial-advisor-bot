@@ -146,6 +146,7 @@ export interface DailySignals {
   system_capability?: "low" | "medium" | "high";
   llm_summary_enabled?: boolean;
   market_summary?: string | null;
+  news_refresh_stats?: NewsRefreshStats;
   ml_model_id?: string | null;
   ml_winner_name?: string | null;
   ml_feature_labels?: string[];
@@ -176,6 +177,12 @@ export interface GlossaryTerms {
   [term: string]: string;
 }
 
+export interface NewsRefreshStats {
+  hit: number;
+  miss: number;
+  disabled: number;
+}
+
 export interface DashboardResponse {
   date: string; // "YYYY-MM-DD"
   regime?: string | null;
@@ -189,6 +196,7 @@ export interface DashboardResponse {
   system_capability?: "low" | "medium" | "high";
   llm_summary_enabled?: boolean;
   market_summary?: string | null;
+  news_refresh_stats?: NewsRefreshStats;
   glossary: GlossaryTerms;
 
   [k: string]: unknown;
