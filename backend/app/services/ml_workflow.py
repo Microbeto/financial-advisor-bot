@@ -36,7 +36,7 @@ from ..models import (
     MLTrainingRequest,
 )
 from .market import get_price_histories
-from .news import get_news_for_date
+from .news import get_news_for_date, refresh_news_if_needed
 from .symbols import resolve_symbol_name
 
 try:
@@ -595,6 +595,8 @@ async def build_training_matrices(
 
     daily_ctx: Dict[str, _DailyNewsFeatures] = {}
     for d in sorted(candidate_dates):
+        # Refresh and persist daily news before extracting features for this date.
+        await refresh_news_if_needed(d, symbols)
         daily_ctx[d] = _daily_news_features(d, symbols, nlp_pipeline=active_pipeline)
 
     news_coverage = _validate_news_coverage_or_raise(daily_ctx, symbols)
@@ -1698,6 +1700,9 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
     histories = await get_price_histories(symbols, days=max(30, int(lookback_days)), concurrency=8)
     today = iso_date_utc()
     active_pipeline = _active_nlp_pipeline()
+
+    # Refresh and persist today's news before deriving inference-time features.
+    await refresh_news_if_needed(today, symbols)
     day_ctx = _daily_news_features(today, symbols, nlp_pipeline=active_pipeline)
 
     X_num: List[List[float]] = []
