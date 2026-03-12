@@ -29,10 +29,21 @@ def _regime_factory(temperature: float, span: int, label: str) -> Callable[[], M
     return factory
 
 
-def _rl_factory(learning_rate: float, temperature: float, label: str) -> Callable[[], MetaCombiner]:
-    # RLAgent variant factory: captures learning rate and softmax temperature
+def _rl_factory(
+    learning_rate: float,
+    temperature: float,
+    gamma: float,
+    reward_cost_rate: float,
+    label: str,
+) -> Callable[[], MetaCombiner]:
+    # RLAgent variant factory: captures optimizer speed, exploration, horizon, and friction penalty
     def factory() -> MetaCombiner:
-        m = RLAgentCombiner(learning_rate=learning_rate, temperature=temperature)
+        m = RLAgentCombiner(
+            learning_rate=learning_rate,
+            temperature=temperature,
+            gamma=gamma,
+            reward_cost_rate=reward_cost_rate,
+        )
         m.name = label
         return m
     return factory
@@ -57,12 +68,12 @@ def get_meta_competitor_factories(random_seed: int = 42) -> List[Callable[[], Me
         _regime_factory(2.0, 40,  "regime_switcher_cool"),  # smooth, long memory
     ]
 
-    # RLAgent grid: vary learning_rate (Q-update speed) and temperature (policy sharpness)
-    # Slow learns cautiously; fast adapts quickly but may overfit recent noise
+    # RLAgent grid: vary learning_rate, temperature, gamma horizon, and turnover penalty
+    # Lower gamma is myopic/reactive; higher gamma values longer-run continuation value
     rl_agent_factories = [
-        _rl_factory(0.01, 0.5, "rl_agent_slow"),   # conservative, focused policy
-        _rl_factory(0.05, 0.8, "rl_agent_base"),   # default
-        _rl_factory(0.10, 1.5, "rl_agent_fast"),   # aggressive, diverse policy
+        _rl_factory(0.01, 0.5, 0.85, 0.0005, "rl_agent_slow_short"),
+        _rl_factory(0.05, 0.8, 0.95, 0.0010, "rl_agent_base_balanced"),
+        _rl_factory(0.10, 1.2, 0.99, 0.0020, "rl_agent_fast_long"),
     ]
 
     # GrandEnsemble: blends one default of each combiner, dynamically re-weighted by realized PnL
