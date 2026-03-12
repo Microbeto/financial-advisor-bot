@@ -77,6 +77,13 @@ def _headline_list(news_items: List[Any]) -> List[str]:
     return out
 
 
+def _is_summary_placeholder(text: Any) -> bool:
+    summary = str(text or "").strip().lower()
+    if not summary:
+        return True
+    return "temporarily unavailable" in summary or "timed out" in summary or "inference" in summary
+
+
 async def _generate_market_summary_if_enabled(news_items: List[Any], capability: str) -> str | None:
     if capability != "high":
         return None
@@ -365,7 +372,7 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
             cached["news_refresh_stats"] = get_news_refresh_stats()
             cached["system_capability"] = capability
             cached["llm_summary_enabled"] = llm_summary_enabled
-            if llm_summary_enabled and not cached.get("market_summary"):
+            if llm_summary_enabled and _is_summary_placeholder(cached.get("market_summary")):
                 cached_summary = await _generate_market_summary_if_enabled(cached.get("top_news") or [], capability)
                 if cached_summary:
                     cached["market_summary"] = cached_summary
@@ -390,7 +397,7 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
         top_news = await _maybe_await(refresh_top_news_of_day(today, symbols=cached_symbols)) or []
 
         market_summary = str(sig.get("market_summary") or "").strip() or None
-        if llm_summary_enabled and not market_summary:
+        if llm_summary_enabled and _is_summary_placeholder(market_summary):
             market_summary = await _generate_market_summary_if_enabled(top_news or [], capability)
 
         resp = DashboardResponse(
