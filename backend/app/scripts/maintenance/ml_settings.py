@@ -8,6 +8,7 @@ from ...services.ml_workflow import get_ml_runtime_settings, update_ml_runtime_s
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    # Define CLI flags for reading/updating ML runtime and CV settings.
     p = argparse.ArgumentParser(description="View or update ML runtime settings")
     p.add_argument("--show", action="store_true", help="Print effective settings")
     p.add_argument("--tp-barrier", type=float, default=None, help="Take-profit volatility multiplier, e.g. 2.0")
@@ -20,9 +21,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    # Parse command-line arguments provided by the operator.
     args = _build_parser().parse_args()
+    # Initialize DB connection used by settings service functions.
     db.init_db()
     try:
+        # Collect only explicitly provided settings for partial updates.
         updates = {
             "tp_barrier": args.tp_barrier,
             "sl_barrier": args.sl_barrier,
@@ -34,14 +38,19 @@ def main() -> None:
         updates = {k: v for k, v in updates.items() if v is not None}
 
         if updates:
+            # Persist normalized runtime settings when update flags are present.
             out = update_ml_runtime_settings(updates)
         else:
+            # Read current effective runtime settings when no updates are requested.
             out = get_ml_runtime_settings()
 
+        # Print machine-readable JSON output for scripts and operators.
         print(json.dumps(out, indent=2))
     finally:
+        # Always close DB resources even if an exception occurs.
         db.close_db()
 
 
 if __name__ == "__main__":
+    # Execute CLI entrypoint for direct script usage.
     main()
