@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from ..market import (
+    MARKET_CACHE_ALLOW_RESTATEMENTS,
     MARKET_CACHE_TTL_DAYS,
+    MARKET_CACHE_PIT_IMMUTABLE,
     MARKET_LOCAL_CACHE_DIR,
     MARKET_LOCAL_CACHE_ENABLED,
     get_market_cache_runtime_stats,
@@ -78,6 +80,9 @@ def get_cache_stats() -> Dict[str, Any]:
         "local_cache_enabled": bool(MARKET_LOCAL_CACHE_ENABLED),
         "cache_dir": str(_cache_root()),
         "ttl_days": int(MARKET_CACHE_TTL_DAYS),
+        "pit_immutable": bool(MARKET_CACHE_PIT_IMMUTABLE),
+        "allow_restatements": bool(MARKET_CACHE_ALLOW_RESTATEMENTS),
+        "pit_guard_active": bool(MARKET_CACHE_PIT_IMMUTABLE and not MARKET_CACHE_ALLOW_RESTATEMENTS),
         "file_count": len(files),
         "total_size_bytes": int(total_size),
         "total_size_human": _bytes_human(total_size),
