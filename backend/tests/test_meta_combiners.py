@@ -12,7 +12,7 @@ import pytest
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.ml.meta_labeler import MetaLabelerCombiner
-from app.ml.meta_interface import scalar_allocation
+from app.ml.meta_interface import MetaCombiner, scalar_allocation
 from app.ml.regime_switcher import RegimeSwitcherCombiner
 from app.ml.rl_agent import RLAgentCombiner
 from app.ml.tournament import run_walk_forward_tournament
@@ -43,6 +43,61 @@ def _toy_data(n: int = 120):
     split_1 = (np.arange(0, 70, dtype=int), np.arange(70, 95, dtype=int))
     split_2 = (np.arange(0, 95, dtype=int), np.arange(95, n, dtype=int))
     return base, market, returns, [split_1, split_2]
+
+
+class _StatefulCounterCombiner(MetaCombiner):
+    name = "stateful_counter"
+
+    def __init__(self) -> None:
+        self.train_calls = 0
+        self.step_calls = 0
+
+    def train(self, base_predictions: np.ndarray, market_features: np.ndarray, actual_returns: np.ndarray) -> None:
+        del base_predictions, market_features, actual_returns
+        self.train_calls += 1
+        self.step_calls = 0
+
+    def predict_confidence(self, today_base_predictions: np.ndarray, today_market_features: np.ndarray) -> np.ndarray:
+        del today_base_predictions, today_market_features
+        return np.array([1.0], dtype=float)
+
+    def allocate(
+        self,
+        today_base_predictions: np.ndarray,
+        today_market_features: np.ndarray,
+        current_allocation: np.ndarray | None = None,
+    ) -> np.ndarray:
+        del today_base_predictions, today_market_features, current_allocation
+        return np.array([1.0], dtype=float)
+
+    def step_update(
+        self,
+        actual_return: np.ndarray,
+        realized_base_predictions: np.ndarray | None = None,
+        realized_market_features: np.ndarray | None = None,
+    ) -> None:
+        del actual_return, realized_base_predictions, realized_market_features
+        self.step_calls += 1
+
+
+class _FlatCombiner(MetaCombiner):
+    name = "flat"
+
+    def train(self, base_predictions: np.ndarray, market_features: np.ndarray, actual_returns: np.ndarray) -> None:
+        del base_predictions, market_features, actual_returns
+
+    def predict_confidence(self, today_base_predictions: np.ndarray, today_market_features: np.ndarray) -> np.ndarray:
+        del today_base_predictions, today_market_features
+        return np.array([0.0], dtype=float)
+
+    def allocate(
+        self,
+        today_base_predictions: np.ndarray,
+        today_market_features: np.ndarray,
+        current_allocation: np.ndarray | None = None,
+    ) -> np.ndarray:
+        del today_base_predictions, today_market_features, current_allocation
+        return np.array([0.0], dtype=float)
 
 
 def _max_drawdown(returns: np.ndarray) -> float:
@@ -99,6 +154,38 @@ def test_walk_forward_tournament_evaluates_all_competitors():
         assert "mean_return" in stats
         assert name in result.daily_returns
         assert len(result.daily_returns[name]) > 0
+
+
+def test_walk_forward_tournament_preserves_stateful_winner_state():
+    n = 60
+    base = np.full((n, 2), 0.6, dtype=float)
+    market = np.zeros((n, 4), dtype=float)
+    returns = np.full(n, 0.01, dtype=float)
+
+    splits = [
+        (np.arange(0, 30, dtype=int), np.arange(30, 45, dtype=int)),
+        (np.arange(0, 45, dtype=int), np.arange(45, 60, dtype=int)),
+    ]
+
+    result = run_walk_forward_tournament(
+        competitor_factories=[
+            lambda: _StatefulCounterCombiner(),
+            lambda: _FlatCombiner(),
+        ],
+        base_predictions=base,
+        market_features=market,
+        actual_returns=returns,
+        splits=splits,
+    )
+
+    assert result.winner_name == "stateful_counter"
+    winner = result.winner_model
+    assert isinstance(winner, _StatefulCounterCombiner)
+
+    # Stateful winner should keep online-updated state from OOS evaluation.
+    expected_step_calls = sum(len(te_idx) for _, te_idx in splits)
+    assert winner.step_calls == expected_step_calls
+    assert winner.train_calls == 1
 
 
 def test_combiner_respects_max_drawdown_limit(monkeypatch):
