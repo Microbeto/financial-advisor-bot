@@ -8,7 +8,7 @@ import numpy as np
 from .meta_interface import MetaCombiner, scalar_allocation
 
 
-DEFAULT_TRANSACTION_COST_RATE = 0.001
+DEFAULT_TRANSACTION_COST_BPS = 10.0
 DEFAULT_ANNUAL_RISK_FREE_RATE = 0.04
 
 
@@ -20,13 +20,18 @@ class TournamentResult:
     daily_returns: Dict[str, List[float]]
 
 
-def _sharpe_ratio(returns: np.ndarray) -> float:
+def _cost_rate_from_bps(cost_bps: float) -> float:
+    bps = float(max(0.0, cost_bps))
+    return float(bps / 10000.0)
+
+
+def _sharpe_ratio(returns: np.ndarray, annual_risk_free_rate: float = DEFAULT_ANNUAL_RISK_FREE_RATE) -> float:
     if returns.size < 2:
         return 0.0
     std = float(np.std(returns, ddof=1))
     if std <= 1e-12:
         return 0.0
-    daily_rf = float(DEFAULT_ANNUAL_RISK_FREE_RATE / 252.0)
+    daily_rf = float(annual_risk_free_rate / 252.0)
     excess_mean = float(np.mean(returns) - daily_rf)
     return float((excess_mean / std) * np.sqrt(252.0))
 
@@ -44,33 +49,14 @@ def _is_stateful_competitor(model: MetaCombiner) -> bool:
     return type(model).step_update is not MetaCombiner.step_update
 
 
-def _warm_up_online_state(
-    model: MetaCombiner,
-    base_predictions: np.ndarray,
-    market_features: np.ndarray,
-    actual_returns: np.ndarray,
-) -> None:
-    current_allocation = np.zeros(1, dtype=float)
-    for row_idx in range(base_predictions.shape[0]):
-        alloc_vec = model.allocate(
-            base_predictions[row_idx],
-            market_features[row_idx],
-            current_allocation=current_allocation,
-        )
-        current_allocation = np.asarray(alloc_vec, dtype=float).reshape(-1)
-        model.step_update(
-            actual_return=np.array([float(actual_returns[row_idx])], dtype=float),
-            realized_base_predictions=base_predictions[row_idx],
-            realized_market_features=market_features[row_idx],
-        )
-
-
 def run_walk_forward_tournament(
     competitor_factories: Sequence[Callable[[], MetaCombiner]],
     base_predictions: np.ndarray,
     market_features: np.ndarray,
     actual_returns: np.ndarray,
     splits: List[Tuple[np.ndarray, np.ndarray]],
+    transaction_cost_bps: float = DEFAULT_TRANSACTION_COST_BPS,
+    annual_risk_free_rate: float = DEFAULT_ANNUAL_RISK_FREE_RATE,
 ) -> TournamentResult:
     seeded_models = [factory() for factory in competitor_factories]
     competitor_names = [model.name for model in seeded_models]
@@ -90,6 +76,7 @@ def run_walk_forward_tournament(
     }
     initialized_stateful: set[str] = set()
     return_log: Dict[str, List[float]] = {name: [] for name in competitor_names}
+    trading_cost = _cost_rate_from_bps(transaction_cost_bps)
 
     ordered_splits = sorted(
         splits,
@@ -140,7 +127,7 @@ def run_walk_forward_tournament(
                 current_allocations[name] = np.asarray(alloc_vec, dtype=float).reshape(-1)
                 alloc = scalar_allocation(alloc_vec)
                 turnover = abs(alloc - prev_alloc)
-                ret = (alloc * actual_ret) - (DEFAULT_TRANSACTION_COST_RATE * turnover)
+                ret = (alloc * actual_ret) - (trading_cost * turnover)
                 return_log[name].append(float(ret))
                 model.step_update(
                     actual_return=np.array([actual_ret], dtype=float),
@@ -159,7 +146,7 @@ def run_walk_forward_tournament(
     for name, vals in return_log.items():
         arr = np.asarray(vals, dtype=float)
         stats[name] = {
-            "sharpe": _sharpe_ratio(arr),
+            "sharpe": _sharpe_ratio(arr, annual_risk_free_rate=annual_risk_free_rate),
             "max_drawdown": _max_drawdown(arr),
             "mean_return": float(np.mean(arr)) if arr.size else 0.0,
             "volatility": float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0,
@@ -174,17 +161,21 @@ def run_walk_forward_tournament(
     winner_name = ranked[0][0] if ranked else competitor_names[0]
 
     winner_model: MetaCombiner | None = None
-    for factory in competitor_factories:
-        model = factory()
-        if model.name == winner_name:
-            winner_model = model
-            break
+    if stateful_flags.get(winner_name, False):
+        winner_model = persistent_models.get(winner_name)
+
+    if winner_model is None:
+        for factory in competitor_factories:
+            model = factory()
+            if model.name == winner_name:
+                winner_model = model
+                break
     if winner_model is None:
         winner_model = competitor_factories[0]()
 
-    winner_model.train(base_predictions, market_features, actual_returns)
-    if _is_stateful_competitor(winner_model):
-        _warm_up_online_state(winner_model, base_predictions, market_features, actual_returns)
+    if not stateful_flags.get(winner_name, False):
+        winner_model.train(base_predictions, market_features, actual_returns)
+
     return TournamentResult(
         winner_name=winner_name,
         winner_model=winner_model,
