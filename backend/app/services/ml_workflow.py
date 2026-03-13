@@ -49,6 +49,7 @@ ML_MODEL_MAX_COUNT = int(os.getenv("ML_MODEL_MAX_COUNT", "10"))
 ML_SELECTED_TOP_K = int(os.getenv("ML_SELECTED_TOP_K", "3"))
 WALK_FORWARD_SPLITS = int(os.getenv("ML_WALK_FORWARD_SPLITS", "5"))
 WALK_FORWARD_MIN_TRAIN = int(os.getenv("ML_WALK_FORWARD_MIN_TRAIN", "120"))
+WALK_FORWARD_PURGE_DAYS = int(os.getenv("ML_WALK_FORWARD_PURGE_DAYS", "0"))
 
 TRIPLE_BARRIER_TP = float(os.getenv("ML_TP_BARRIER", "0.05"))
 TRIPLE_BARRIER_SL = float(os.getenv("ML_SL_BARRIER", "0.03"))
@@ -85,6 +86,7 @@ _RUNTIME_SETTINGS_DEFAULTS: Dict[str, Any] = {
     "time_barrier_days": int(TRIPLE_BARRIER_HOLD_DAYS),
     "walk_forward_splits": int(WALK_FORWARD_SPLITS),
     "walk_forward_min_train": int(WALK_FORWARD_MIN_TRAIN),
+    "walk_forward_purge_days": int(WALK_FORWARD_PURGE_DAYS),
 }
 
 
@@ -529,6 +531,23 @@ def _validate_news_coverage_or_raise(daily_ctx: Dict[str, _DailyNewsFeatures], s
     return report
 
 
+def _rolling_daily_volatility(closes: Sequence[float], idx: int, lookback: int = 20) -> float:
+    if idx <= 1:
+        return 0.0
+
+    start = max(1, int(idx) - max(2, int(lookback)) + 1)
+    rets: List[float] = []
+    for i in range(start, idx + 1):
+        p0 = float(closes[i - 1])
+        p1 = float(closes[i])
+        if p0 > 0.0:
+            rets.append((p1 / p0) - 1.0)
+
+    if len(rets) < 2:
+        return 0.0
+    return float(np.std(np.asarray(rets, dtype=float), ddof=1))
+
+
 def _triple_barrier_label(closes: Sequence[float], idx: int, horizon: int, tp: float, sl: float) -> int:
     if idx < 0 or idx >= len(closes) - 1:
         return 0
@@ -536,12 +555,17 @@ def _triple_barrier_label(closes: Sequence[float], idx: int, horizon: int, tp: f
     if entry <= 0:
         return 0
 
+    # Use TP/SL values as volatility multipliers so barrier distance adapts per asset risk.
+    sigma_i = max(1e-6, _rolling_daily_volatility(closes, idx, lookback=20))
+    tp_abs = float(max(0.0, float(tp)) * sigma_i)
+    sl_abs = float(max(0.0, abs(float(sl))) * sigma_i)
+
     end = min(len(closes) - 1, idx + max(1, horizon))
     for j in range(idx + 1, end + 1):
         ret = (float(closes[j]) / entry) - 1.0
-        if ret >= float(tp):
+        if ret >= tp_abs:
             return 1
-        if ret <= -abs(float(sl)):
+        if ret <= -sl_abs:
             return 0
 
     # Time barrier reached without TP/SL hit: fallback to sign of terminal return.
@@ -802,6 +826,7 @@ def get_ml_runtime_settings() -> Dict[str, Any]:
     tb = int(doc.get("time_barrier_days", _RUNTIME_SETTINGS_DEFAULTS["time_barrier_days"]))
     splits = int(doc.get("walk_forward_splits", _RUNTIME_SETTINGS_DEFAULTS["walk_forward_splits"]))
     min_train = int(doc.get("walk_forward_min_train", _RUNTIME_SETTINGS_DEFAULTS["walk_forward_min_train"]))
+    purge_days = int(doc.get("walk_forward_purge_days", _RUNTIME_SETTINGS_DEFAULTS["walk_forward_purge_days"]))
 
     return {
         "tp_barrier": max(0.001, tp),
@@ -809,6 +834,7 @@ def get_ml_runtime_settings() -> Dict[str, Any]:
         "time_barrier_days": max(1, tb),
         "walk_forward_splits": max(2, splits),
         "walk_forward_min_train": max(40, min_train),
+        "walk_forward_purge_days": max(0, purge_days),
     }
 
 
@@ -820,6 +846,7 @@ def update_ml_runtime_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
         "time_barrier_days",
         "walk_forward_splits",
         "walk_forward_min_train",
+        "walk_forward_purge_days",
     }
 
     for k, v in (payload or {}).items():
@@ -833,6 +860,7 @@ def update_ml_runtime_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
         "time_barrier_days": max(1, int(current["time_barrier_days"])),
         "walk_forward_splits": max(2, int(current["walk_forward_splits"])),
         "walk_forward_min_train": max(40, int(current["walk_forward_min_train"])),
+        "walk_forward_purge_days": max(0, int(current.get("walk_forward_purge_days", 0))),
     }
 
     col = _runtime_settings_col()
@@ -1440,6 +1468,7 @@ def _build_walk_forward_splits(
     req_test_size: float,
     n_splits: int,
     min_train_samples: int,
+    purge_days: int = 0,
 ) -> List[Tuple[np.ndarray, np.ndarray]]:
     if n_samples < 120:
         return []
@@ -1450,7 +1479,15 @@ def _build_walk_forward_splits(
 
     splitter = TimeSeriesSplit(n_splits=n_splits, test_size=test_size)
     out: List[Tuple[np.ndarray, np.ndarray]] = []
+    purge = max(0, int(purge_days))
     for tr_idx, te_idx in splitter.split(np.arange(n_samples)):
+        if te_idx.size == 0:
+            continue
+        te_start = int(te_idx[0])
+        if purge > 0:
+            cutoff = te_start - purge
+            tr_idx = tr_idx[tr_idx < cutoff]
+
         if len(tr_idx) < int(min_train_samples):
             continue
         if len(te_idx) < 10:
@@ -1921,6 +1958,7 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
         req.test_size,
         n_splits=int(runtime["walk_forward_splits"]),
         min_train_samples=int(runtime["walk_forward_min_train"]),
+        purge_days=max(int(runtime.get("walk_forward_purge_days", 0)), int(runtime["time_barrier_days"])),
     )
     if not splits:
         runs.update_one({"run_id": run_id}, {"$set": {"status": "failed", "error": "Could not build walk-forward folds"}})
