@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from itertools import product
 from typing import Callable, List
 
 from .grand_ensemble import GrandEnsembleCombiner
@@ -62,11 +63,13 @@ def get_meta_competitor_factories(random_seed: int = 42) -> List[Callable[[], Me
 
     # RegimeSwitcher grid: vary softmax_temperature (exploitation/exploration) and ewma_span (memory)
     # Lower temperature → sharper model selection; longer span → smoother regime memory
-    regime_switcher_factories = [
-        _regime_factory(0.5, 10,  "regime_switcher_hot"),   # aggressive, short memory
-        _regime_factory(1.0, 20,  "regime_switcher_base"),  # default, balanced
-        _regime_factory(2.0, 40,  "regime_switcher_cool"),  # smooth, long memory
-    ]
+    regime_temperatures = [0.5, 1.0, 2.0]
+    regime_spans = [10, 20, 40]
+    regime_switcher_factories = []
+    for temperature, span in product(regime_temperatures, regime_spans):
+        temp_tag = str(temperature).replace(".", "p")
+        label = f"regime_switcher_t{temp_tag}_s{int(span)}"
+        regime_switcher_factories.append(_regime_factory(temperature, span, label))
 
     # RLAgent grid (9 variants): speed/exploration × horizon/friction profiles
     # This gives tournament selection room to discover regime-specific RL behavior.
