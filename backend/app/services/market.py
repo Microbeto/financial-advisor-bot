@@ -50,6 +50,8 @@ MARKET_LOCAL_CACHE_DIR = os.getenv(
     "MARKET_LOCAL_CACHE_DIR",
     str(Path(__file__).resolve().parents[2] / ".cache" / "market"),
 )
+MARKET_CACHE_PIT_IMMUTABLE = os.getenv("MARKET_CACHE_PIT_IMMUTABLE", "1").lower() in ("1", "true", "yes")
+MARKET_CACHE_ALLOW_RESTATEMENTS = os.getenv("MARKET_CACHE_ALLOW_RESTATEMENTS", "0").lower() in ("1", "true", "yes")
 
 # Delay between HTTP calls (helps rate limiting)
 MARKET_REQUEST_DELAY_MS = int(os.getenv("MARKET_REQUEST_DELAY_MS", "250"))
@@ -102,6 +104,49 @@ def _cache_file_path(symbol: str, interval: str, days: int) -> Path:
     return root / f"{safe_symbol}_{safe_interval}_{int(days)}.json"
 
 
+def _pit_immutable_enabled() -> bool:
+    return bool(MARKET_CACHE_PIT_IMMUTABLE and not MARKET_CACHE_ALLOW_RESTATEMENTS)
+
+
+def _point_date(point: Dict[str, Any]) -> str:
+    return str(point.get("t") or "").strip()
+
+
+def _merge_pit_points(existing_points: List[Dict[str, Any]], incoming_points: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not existing_points:
+        return list(incoming_points)
+    if not incoming_points:
+        return list(existing_points)
+
+    kept_by_date: Dict[str, Dict[str, Any]] = {}
+    passthrough: List[Dict[str, Any]] = []
+
+    for p in existing_points:
+        if not isinstance(p, dict):
+            continue
+        d = _point_date(p)
+        if d and d not in kept_by_date:
+            kept_by_date[d] = dict(p)
+            continue
+        if not d:
+            passthrough.append(dict(p))
+
+    for p in incoming_points:
+        if not isinstance(p, dict):
+            continue
+        d = _point_date(p)
+        if d and d in kept_by_date:
+            continue
+        if d:
+            kept_by_date[d] = dict(p)
+        else:
+            passthrough.append(dict(p))
+
+    merged = list(kept_by_date.values()) + passthrough
+    merged.sort(key=lambda row: str(row.get("t") or ""))
+    return merged
+
+
 def _is_disk_doc_fresh(doc: dict, ttl_days: int) -> bool:
     if ttl_days <= 0:
         return True
@@ -140,13 +185,23 @@ def _write_disk_cache(symbol: str, interval: str, days: int, points: List[Dict[s
         return
     try:
         p = _cache_file_path(symbol, interval, days)
+        persisted_points = list(points)
+        if _pit_immutable_enabled() and p.exists():
+            try:
+                current_doc = json.loads(p.read_text(encoding="utf-8"))
+                current_points = current_doc.get("points") if isinstance(current_doc, dict) else []
+                if isinstance(current_points, list):
+                    persisted_points = _merge_pit_points(current_points, persisted_points)
+            except Exception:
+                pass
+
         payload = {
             "symbol": symbol,
             "interval": interval,
             "days": int(days),
             "source": source,
             "fetched_at": _utc_now().isoformat().replace("+00:00", "Z"),
-            "points": points,
+            "points": persisted_points,
         }
         p.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
         _inc_cache_stat("disk_writes")
@@ -424,16 +479,23 @@ def _read_cache(symbol: str, interval: str, days: int) -> Optional[List[Dict[str
 
 def _write_cache(symbol: str, interval: str, days: int, points: List[Dict[str, Any]], source: str) -> None:
     _inc_cache_stat("writes")
-    _write_disk_cache(symbol, interval, days, points, source)
+    persisted_points = list(points)
+    _write_disk_cache(symbol, interval, days, persisted_points, source)
 
     try:
         mp = db.require_col(db.market_prices_col, "market_prices")
+        if _pit_immutable_enabled():
+            existing = mp.find_one(_cache_key(symbol, interval, days), {"points": 1}) or {}
+            existing_points = existing.get("points") or []
+            if isinstance(existing_points, list):
+                persisted_points = _merge_pit_points(existing_points, persisted_points)
+
         mp.update_one(
             _cache_key(symbol, interval, days),
             {
                 "$set": {
                     **_cache_key(symbol, interval, days),
-                    "points": points,
+                    "points": persisted_points,
                     "source": source,
                     "fetched_at": _utc_now(),
                 }
