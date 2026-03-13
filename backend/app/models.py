@@ -429,6 +429,7 @@ class MLRuntimeSettingsUpdateRequest(BaseModel):
     time_barrier_days: Optional[int] = None
     walk_forward_splits: Optional[int] = None
     walk_forward_min_train: Optional[int] = None
+    walk_forward_purge_days: Optional[int] = None
 
 
 class MLRuntimeSettingsResponse(BaseModel):
@@ -437,3 +438,4 @@ class MLRuntimeSettingsResponse(BaseModel):
     time_barrier_days: int
     walk_forward_splits: int
     walk_forward_min_train: int
+    walk_forward_purge_days: int
