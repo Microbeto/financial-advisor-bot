@@ -17,6 +17,7 @@ from app.services.ml_workflow import (
     _DailyNewsFeatures,
     _algo_factories,
     _build_walk_forward_splits,
+    _triple_barrier_label,
     _doc_to_model_info,
     _data_completeness_from_news_coverage,
     _fit_score_over_walk_forward,
@@ -99,6 +100,29 @@ def test_feature_stability_for_flat_prices():
     assert feats[0] == 0.0
     assert feats[1] == 0.0
     assert feats[2] == 0.0
+
+
+def test_triple_barrier_uses_volatility_scaled_thresholds():
+    # Returns here are sub-1%, so static TP=2.0 would never trigger.
+    closes = [100.0, 100.2, 100.0, 100.3, 100.1, 100.5, 101.2, 101.5]
+    label = _triple_barrier_label(closes, idx=5, horizon=2, tp=2.0, sl=1.5)
+    assert label == 1
+
+
+def test_walk_forward_splits_apply_purge_gap():
+    splits = _build_walk_forward_splits(
+        n_samples=300,
+        req_test_size=0.2,
+        n_splits=4,
+        min_train_samples=80,
+        purge_days=10,
+    )
+    assert splits
+
+    for tr_idx, te_idx in splits:
+        assert len(tr_idx) >= 80
+        te_start = int(te_idx[0])
+        assert int(np.max(tr_idx)) <= (te_start - 11)
 
 
 def test_prune_candidates_only_when_at_capacity():
