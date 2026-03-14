@@ -1,3 +1,4 @@
+# Structure: symbol metadata resolution service with external lookup, normalization, and caching.
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -11,14 +12,17 @@ except Exception:
     httpx = None
 
 
+# _utc_now service logic.
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# _clean service logic.
 def _clean(s: str) -> str:
     return " ".join((s or "").strip().split())
 
 
+# _fetch_text service logic.
 async def _fetch_text(url: str, timeout: float = 10.0) -> str:
     if httpx is None:
         return ""
@@ -44,6 +48,7 @@ async def _fetch_text(url: str, timeout: float = 10.0) -> str:
         return ""
 
 
+# _name_from_stooq service logic.
 async def _name_from_stooq(symbol: str) -> Optional[str]:
     """
     Stooq quote endpoint can return a 'Name' column for many symbols.
@@ -85,6 +90,7 @@ async def _name_from_stooq(symbol: str) -> Optional[str]:
         return None
 
 
+# _name_from_wikipedia service logic.
 async def _name_from_wikipedia(symbol: str) -> Optional[str]:
     """
     Very lightweight fallback:
@@ -115,6 +121,7 @@ async def _name_from_wikipedia(symbol: str) -> Optional[str]:
         return None
 
 
+# resolve_symbol_name service logic.
 async def resolve_symbol_name(symbol: str) -> Optional[str]:
     """
     DB cache first. If not found, try Stooq, then Wikipedia.
