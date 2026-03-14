@@ -1,3 +1,4 @@
+# Structure: risk-profile persistence service for read, create-default, and update flows per user.
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -7,6 +8,7 @@ from .. import db
 from ..models import RiskProfile
 
 
+# get_risk_profile_for_user service logic.
 def get_risk_profile_for_user(user_id: str) -> Optional[RiskProfile]:
     col = db.require_col(db.risk_profiles_col, "risk_profiles")
     doc = col.find_one({"user_id": user_id})
@@ -16,6 +18,7 @@ def get_risk_profile_for_user(user_id: str) -> Optional[RiskProfile]:
     return RiskProfile(**doc)
 
 
+# ensure_risk_profile_for_user service logic.
 def ensure_risk_profile_for_user(user_id: str) -> RiskProfile:
     col = db.require_col(db.risk_profiles_col, "risk_profiles")
     existing = col.find_one({"user_id": user_id})
@@ -39,6 +42,7 @@ def ensure_risk_profile_for_user(user_id: str) -> RiskProfile:
     return RiskProfile(**doc)
 
 
+# upsert_risk_profile_for_user service logic.
 def upsert_risk_profile_for_user(user_id: str, profile: RiskProfile) -> RiskProfile:
     col = db.require_col(db.risk_profiles_col, "risk_profiles")
     now = datetime.now(timezone.utc)
