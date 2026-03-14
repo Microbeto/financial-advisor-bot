@@ -1,3 +1,4 @@
+# Structure: authentication service handling default admin setup, password verification, and token issuance.
 from __future__ import annotations
 
 import os
@@ -14,6 +15,7 @@ DEFAULT_ADMIN_LOGIN = "admin"
 DEFAULT_ADMIN_PASSWORD = "1234"
 
 
+# _ensure_default_admin_credentials service logic.
 def _ensure_default_admin_credentials() -> None:
     users = db.require_col(db.users_col, "users")
     login = DEFAULT_ADMIN_LOGIN.lower().strip()
@@ -41,6 +43,7 @@ def _ensure_default_admin_credentials() -> None:
         users.update_one({"_id": doc["_id"]}, {"$set": updates})
 
 
+# bootstrap_admin_if_configured service logic.
 def bootstrap_admin_if_configured() -> None:
     try:
         _ensure_default_admin_credentials()
@@ -57,6 +60,7 @@ def bootstrap_admin_if_configured() -> None:
         return
 
 
+# create_user service logic.
 def create_user(email: str, password: str, role: Role = "user") -> UserPublic:
     users = db.require_col(db.users_col, "users")
     now = datetime.now(timezone.utc)
@@ -77,6 +81,7 @@ def create_user(email: str, password: str, role: Role = "user") -> UserPublic:
     return UserPublic(user_id=str(res.inserted_id), email=doc["email"], role=role, created_at=now)
 
 
+# login_user service logic.
 def login_user(email: str, password: str) -> AuthResponse:
     users = db.require_col(db.users_col, "users")
     login_id = email.lower().strip()
@@ -126,6 +131,7 @@ def login_user(email: str, password: str) -> AuthResponse:
     return AuthResponse(user_id=payload["uid"], email=payload["email"], role=payload["role"], token=token)
 
 
+# verify_token service logic.
 def verify_token(token: str) -> Dict[str, str]:
     payload = _verify(token)
     if not payload:
@@ -138,6 +144,7 @@ def verify_token(token: str) -> Dict[str, str]:
     return {"uid": uid, "role": role, "email": email}
 
 
+# require_admin service logic.
 def require_admin(token: str) -> Dict[str, str]:
     p = verify_token(token)
     if p.get("role") != "admin":
@@ -145,6 +152,7 @@ def require_admin(token: str) -> Dict[str, str]:
     return p
 
 
+# require_roles service logic.
 def require_roles(payload: Dict[str, str], allowed: tuple[str, ...]) -> Dict[str, str]:
     role = str(payload.get("role", "user"))
     if role not in allowed:
