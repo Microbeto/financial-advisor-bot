@@ -1,4 +1,5 @@
 # backend/app/services/scheduler.py
+# Structure: scheduled automation entrypoints for daily ML training and signal generation jobs.
 from __future__ import annotations
 
 import asyncio
@@ -15,10 +16,12 @@ from app.ml.model_router import intelligence_router
 from app.services.signals import generate_daily_signals
 
 
+# implements the _env_true service logic.
 def _env_true(name: str, default: str = "0") -> bool:
     return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
 
 
+# implements the _default_ml_basket service logic.
 def _default_ml_basket() -> list[str]:
     raw = os.getenv(
         "SCHEDULER_ML_BASKET",
@@ -27,6 +30,7 @@ def _default_ml_basket() -> list[str]:
     return [s.upper().strip() for s in raw.split(",") if s.strip()]
 
 
+# implements the run_daily_ml service logic.
 def run_daily_ml(stock_basket: list[str] | None = None) -> None:
     """
     Daily ML workflow hook:
@@ -70,6 +74,7 @@ def run_daily_ml(stock_basket: list[str] | None = None) -> None:
         pass
 
 
+# implements the run_daily service logic.
 def run_daily() -> None:
     """
     Daily refresh entry point.
