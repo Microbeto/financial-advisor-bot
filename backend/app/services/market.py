@@ -1,4 +1,5 @@
 # backend/app/services/market.py
+# Structure: market data service with fetch, cache, and normalization utilities for price/history access.
 from __future__ import annotations
 
 import asyncio
@@ -36,6 +37,7 @@ except Exception:
 pdr = _pdr
 
 
+# Block: defines the PricePoint class and its related behavior.
 @dataclass
 class PricePoint:
     t: str  # ISO date
@@ -78,24 +80,29 @@ _CACHE_STATS: Dict[str, int] = {
 }
 
 
+# _inc_cache_stat service logic.
 def _inc_cache_stat(key: str, value: int = 1) -> None:
     with _CACHE_STATS_LOCK:
         _CACHE_STATS[key] = int(_CACHE_STATS.get(key, 0)) + int(value)
 
 
+# get_market_cache_runtime_stats service logic.
 def get_market_cache_runtime_stats() -> Dict[str, int]:
     with _CACHE_STATS_LOCK:
         return dict(_CACHE_STATS)
 
 
+# _utc_now service logic.
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# _iso_date service logic.
 def _iso_date(d: datetime) -> str:
     return d.astimezone(timezone.utc).date().isoformat()
 
 
+# _cache_file_path service logic.
 def _cache_file_path(symbol: str, interval: str, days: int) -> Path:
     safe_symbol = "".join(ch if ch.isalnum() else "_" for ch in (symbol or "").upper())
     safe_interval = "".join(ch if ch.isalnum() else "_" for ch in (interval or "1d").lower())
@@ -104,14 +111,17 @@ def _cache_file_path(symbol: str, interval: str, days: int) -> Path:
     return root / f"{safe_symbol}_{safe_interval}_{int(days)}.json"
 
 
+# _pit_immutable_enabled service logic.
 def _pit_immutable_enabled() -> bool:
     return bool(MARKET_CACHE_PIT_IMMUTABLE and not MARKET_CACHE_ALLOW_RESTATEMENTS)
 
 
+# _point_date service logic.
 def _point_date(point: Dict[str, Any]) -> str:
     return str(point.get("t") or "").strip()
 
 
+# _merge_pit_points service logic.
 def _merge_pit_points(existing_points: List[Dict[str, Any]], incoming_points: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not existing_points:
         return list(incoming_points)
@@ -147,6 +157,7 @@ def _merge_pit_points(existing_points: List[Dict[str, Any]], incoming_points: Li
     return merged
 
 
+# _is_disk_doc_fresh service logic.
 def _is_disk_doc_fresh(doc: dict, ttl_days: int) -> bool:
     if ttl_days <= 0:
         return True
@@ -161,6 +172,7 @@ def _is_disk_doc_fresh(doc: dict, ttl_days: int) -> bool:
         return False
 
 
+# _read_disk_cache service logic.
 def _read_disk_cache(symbol: str, interval: str, days: int) -> Optional[List[Dict[str, Any]]]:
     if not MARKET_LOCAL_CACHE_ENABLED:
         return None
@@ -180,6 +192,7 @@ def _read_disk_cache(symbol: str, interval: str, days: int) -> Optional[List[Dic
         return None
 
 
+# _write_disk_cache service logic.
 def _write_disk_cache(symbol: str, interval: str, days: int, points: List[Dict[str, Any]], source: str) -> None:
     if not MARKET_LOCAL_CACHE_ENABLED:
         return
@@ -209,6 +222,7 @@ def _write_disk_cache(symbol: str, interval: str, days: int, points: List[Dict[s
         return
 
 
+# _parse_ohlc_csv_points service logic.
 def _parse_ohlc_csv_points(text: str, days: int) -> List[Dict[str, Any]]:
     if not text:
         return []
@@ -283,6 +297,7 @@ def _parse_ohlc_csv_points(text: str, days: int) -> List[Dict[str, Any]]:
         return []
 
 
+# _to_points_from_df service logic.
 def _to_points_from_df(df: Any) -> List[Dict[str, Any]]:
     if df is None or df.empty:
         return []
@@ -365,12 +380,14 @@ def _to_points_from_df(df: Any) -> List[Dict[str, Any]]:
     return out
 
 
+# _sleep_delay service logic.
 async def _sleep_delay() -> None:
     ms = max(0, int(MARKET_REQUEST_DELAY_MS))
     if ms > 0:
         await asyncio.sleep(ms / 1000.0)
 
 
+# _provider_limit service logic.
 async def _provider_limit(url: str) -> None:
     u = (url or "").lower()
     if "stooq.com" in u:
@@ -388,6 +405,7 @@ async def _provider_limit(url: str) -> None:
         return
 
 
+# _fetch_text service logic.
 async def _fetch_text(
     url: str,
     params: Optional[dict] = None,
@@ -411,6 +429,7 @@ async def _fetch_text(
         return ""
 
 
+# _fetch_json service logic.
 async def _fetch_json(
     url: str,
     params: Optional[dict] = None,
@@ -434,10 +453,12 @@ async def _fetch_json(
         return {}
 
 
+# _cache_key service logic.
 def _cache_key(symbol: str, interval: str, days: int) -> Dict[str, Any]:
     return {"symbol": symbol, "interval": interval, "days": int(days)}
 
 
+# _cache_fresh service logic.
 def _cache_fresh(doc: dict, ttl_days: int) -> bool:
     if ttl_days <= 0:
         return True
@@ -451,6 +472,7 @@ def _cache_fresh(doc: dict, ttl_days: int) -> bool:
         return False
 
 
+# _read_cache service logic.
 def _read_cache(symbol: str, interval: str, days: int) -> Optional[List[Dict[str, Any]]]:
     _inc_cache_stat("requests")
 
@@ -477,6 +499,7 @@ def _read_cache(symbol: str, interval: str, days: int) -> Optional[List[Dict[str
         return None
 
 
+# _write_cache service logic.
 def _write_cache(symbol: str, interval: str, days: int, points: List[Dict[str, Any]], source: str) -> None:
     _inc_cache_stat("writes")
     persisted_points = list(points)
@@ -506,6 +529,7 @@ def _write_cache(symbol: str, interval: str, days: int, points: List[Dict[str, A
         pass
 
 
+# _parse_prefer_sources service logic.
 def _parse_prefer_sources() -> List[str]:
     parts = [p.strip().lower() for p in (PREFER_SOURCES or "").split(",") if p.strip()]
     if not parts:
@@ -513,6 +537,7 @@ def _parse_prefer_sources() -> List[str]:
     return parts
 
 
+# _range_for_days service logic.
 def _range_for_days(days: int) -> str:
     d = int(max(5, days))
     if d <= 7:
@@ -528,6 +553,7 @@ def _range_for_days(days: int) -> str:
     return "2y"
 
 
+# _history_from_yahoo_chart service logic.
 async def _history_from_yahoo_chart(symbol: str, days: int) -> List[Dict[str, Any]]:
     sym = (symbol or "").strip().upper()
     if not sym:
@@ -593,6 +619,7 @@ async def _history_from_yahoo_chart(symbol: str, days: int) -> List[Dict[str, An
         return []
 
 
+# _history_from_yahoo_csv service logic.
 async def _history_from_yahoo_csv(symbol: str, days: int) -> List[Dict[str, Any]]:
     sym = (symbol or "").strip().upper()
     if not sym:
@@ -621,6 +648,7 @@ async def _history_from_yahoo_csv(symbol: str, days: int) -> List[Dict[str, Any]
     return _parse_ohlc_csv_points(text, days)
 
 
+# _history_from_stooq_csv service logic.
 async def _history_from_stooq_csv(symbol: str, days: int) -> List[Dict[str, Any]]:
     sym = (symbol or "").strip().lower()
     if not sym:
@@ -640,6 +668,7 @@ async def _history_from_stooq_csv(symbol: str, days: int) -> List[Dict[str, Any]
     return _parse_ohlc_csv_points(text, days)
 
 
+# _history_from_pdr_stooq service logic.
 async def _history_from_pdr_stooq(symbol: str, days: int) -> List[Dict[str, Any]]:
     if pdr is None:
         return []
@@ -664,6 +693,7 @@ async def _history_from_pdr_stooq(symbol: str, days: int) -> List[Dict[str, Any]
         return []
 
 
+# _history_from_yfinance service logic.
 async def _history_from_yfinance(symbol: str, days: int) -> List[Dict[str, Any]]:
     if not ENABLE_YFINANCE or yf is None or pd is None:
         return []
@@ -688,6 +718,7 @@ async def _history_from_yfinance(symbol: str, days: int) -> List[Dict[str, Any]]
         return []
 
 
+# _batch_history_from_yfinance service logic.
 async def _batch_history_from_yfinance(symbols: List[str], days: int) -> Dict[str, List[Dict[str, Any]]]:
     """
     Batch download reduces rate-limit risk.
@@ -741,6 +772,7 @@ async def _batch_history_from_yfinance(symbols: List[str], days: int) -> Dict[st
         return out
 
 
+# get_price_history service logic.
 async def get_price_history(symbol: str, days: int = 180) -> Dict[str, Any]:
     sym = (symbol or "").strip().upper()
     days = int(days or 180)
@@ -775,6 +807,7 @@ async def get_price_history(symbol: str, days: int = 180) -> Dict[str, Any]:
     return {"symbol": sym, "points": []}
 
 
+# get_price_histories service logic.
 async def get_price_histories(
     symbols: List[str],
     days: int = 180,
@@ -850,6 +883,7 @@ async def get_price_histories(
     return results
 
 
+# _news_to_markers service logic.
 def _news_to_markers(news_docs: List[Any]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for n in news_docs or []:
@@ -890,6 +924,7 @@ def _news_to_markers(news_docs: List[Any]) -> List[Dict[str, Any]]:
     return out
 
 
+# get_annotated_history service logic.
 async def get_annotated_history(symbol: str, days: int = 180, news_docs: Optional[List[Any]] = None) -> Dict[str, Any]:
     base = await get_price_history(symbol, days=days)
     markers = _news_to_markers(news_docs or [])
