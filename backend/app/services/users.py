@@ -1,3 +1,4 @@
+# Structure: user service exposing role/public-profile lookups and user-list retrieval helpers.
 from __future__ import annotations
 
 from typing import List, Optional
@@ -6,6 +7,7 @@ from .. import db
 from ..models import Role, UserPublic
 
 
+# get_user_public service logic.
 def get_user_public(user_id: str) -> Optional[UserPublic]:
     users = db.require_col(db.users_col, "users")
     oid = _obj_id(user_id)
@@ -24,6 +26,7 @@ def get_user_public(user_id: str) -> Optional[UserPublic]:
     )
 
 
+# get_user_role service logic.
 def get_user_role(user_id: str) -> Role:
     p = get_user_public(user_id)
     if not p:
@@ -34,6 +37,7 @@ def get_user_role(user_id: str) -> Role:
     return "user"
 
 
+# list_users service logic.
 def list_users(limit: int = 200) -> List[UserPublic]:
     users = db.require_col(db.users_col, "users")
     docs = list(users.find({}).sort([("created_at", -1)]).limit(max(1, int(limit))))
@@ -50,6 +54,7 @@ def list_users(limit: int = 200) -> List[UserPublic]:
     return out
 
 
+# update_user_role service logic.
 def update_user_role(user_id: str, role: Role) -> Optional[UserPublic]:
     users = db.require_col(db.users_col, "users")
     oid = _obj_id(user_id)
@@ -60,6 +65,7 @@ def update_user_role(user_id: str, role: Role) -> Optional[UserPublic]:
     return get_user_public(user_id)
 
 
+# delete_user service logic.
 def delete_user(user_id: str) -> bool:
     users = db.require_col(db.users_col, "users")
     oid = _obj_id(user_id)
@@ -70,6 +76,7 @@ def delete_user(user_id: str) -> bool:
     return bool(res.deleted_count > 0)
 
 
+# _obj_id service logic.
 def _obj_id(s: str):
     try:
         from bson import ObjectId
