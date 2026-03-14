@@ -1,3 +1,4 @@
+# Structure: admin cache-control service for inspecting, pruning, and clearing cached market artifacts.
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -14,16 +15,19 @@ from ..market import (
 )
 
 
+# Block: implements the _utc_now service logic.
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Block: implements the _cache_root service logic.
 def _cache_root() -> Path:
     root = Path(MARKET_LOCAL_CACHE_DIR)
     root.mkdir(parents=True, exist_ok=True)
     return root
 
 
+# Block: implements the _iter_cache_files service logic.
 def _iter_cache_files() -> List[Path]:
     root = _cache_root()
     if not root.exists():
@@ -31,6 +35,7 @@ def _iter_cache_files() -> List[Path]:
     return [p for p in root.glob("*.json") if p.is_file()]
 
 
+# Block: implements the _file_age_days service logic.
 def _file_age_days(path: Path) -> float:
     try:
         mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
@@ -40,6 +45,7 @@ def _file_age_days(path: Path) -> float:
         return 999999.0
 
 
+# Block: implements the _bytes_human service logic.
 def _bytes_human(n: int) -> str:
     size = float(max(0, int(n)))
     units = ["B", "KB", "MB", "GB", "TB"]
@@ -50,6 +56,7 @@ def _bytes_human(n: int) -> str:
     return f"{size:.2f} {units[i]}"
 
 
+# Block: implements the get_cache_stats service logic.
 def get_cache_stats() -> Dict[str, Any]:
     files = _iter_cache_files()
     runtime = get_market_cache_runtime_stats()
@@ -96,6 +103,7 @@ def get_cache_stats() -> Dict[str, Any]:
     }
 
 
+# Block: implements the prune_stale_cache service logic.
 def prune_stale_cache(max_age_days: int | None = None, dry_run: bool = True) -> Dict[str, Any]:
     ttl_days = int(max_age_days if max_age_days is not None else MARKET_CACHE_TTL_DAYS)
     ttl_days = max(0, ttl_days)
@@ -136,6 +144,7 @@ def prune_stale_cache(max_age_days: int | None = None, dry_run: bool = True) -> 
     }
 
 
+# Block: implements the clear_cache service logic.
 def clear_cache(scope: str = "stale", max_age_days: int | None = None, dry_run: bool = False) -> Dict[str, Any]:
     scope_clean = (scope or "stale").strip().lower()
     if scope_clean == "stale":
