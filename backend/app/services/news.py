@@ -1,3 +1,4 @@
+# Structure: news ingestion service with provider fallbacks, parsing, caching, and glossary updates.
 from __future__ import annotations
 
 import asyncio
@@ -23,6 +24,7 @@ except Exception:
 
 
 # Simple logging (no extra deps)
+# _log service logic.
 def _log(level: str, msg: str) -> None:
     # Keep logs visible under uvicorn without requiring logging config changes
     print(f"[news][{level}] {msg}")
@@ -104,6 +106,7 @@ NEWS_CASCADE_LEXICON_ABS_THRESHOLD = float(os.getenv("NEWS_CASCADE_LEXICON_ABS_T
 _NEWS_REFRESH_STATS: Dict[str, int] = {"hit": 0, "miss": 0, "disabled": 0}
 
 
+# _log_refresh_stats service logic.
 def _log_refresh_stats(path: str, date: str, symbols_count: int, item_count: int) -> None:
     if not NEWS_REFRESH_LOG_ENABLED:
         return
@@ -117,6 +120,7 @@ def _log_refresh_stats(path: str, date: str, symbols_count: int, item_count: int
     )
 
 
+# get_news_refresh_stats service logic.
 def get_news_refresh_stats() -> Dict[str, int]:
     # Return a safe copy so callers cannot mutate internal counters directly.
     return {
@@ -126,6 +130,7 @@ def get_news_refresh_stats() -> Dict[str, int]:
     }
 
 
+# Block: defines the _NewsFinBertInferencer class and its related behavior.
 class _NewsFinBertInferencer:
     def __init__(self) -> None:
         self._ready = False
@@ -189,6 +194,7 @@ class _NewsFinBertInferencer:
 _NEWS_FINBERT: Optional[_NewsFinBertInferencer] = None
 
 
+# _get_news_finbert service logic.
 def _get_news_finbert() -> _NewsFinBertInferencer:
     global _NEWS_FINBERT
     if _NEWS_FINBERT is None:
@@ -196,11 +202,13 @@ def _get_news_finbert() -> _NewsFinBertInferencer:
     return _NEWS_FINBERT
 
 
+# _utc_day_key service logic.
 def _utc_day_key(dt: Optional[datetime] = None) -> str:
     d = (dt or datetime.now(timezone.utc)).astimezone(timezone.utc).date()
     return d.isoformat()
 
 
+# _three_line_summary service logic.
 def _three_line_summary(text: str) -> str:
     s = (text or "").strip().replace("\n", " ")
     if not s:
@@ -212,6 +220,7 @@ def _three_line_summary(text: str) -> str:
     return ". ".join(parts[:3]) + "."
 
 
+# _score_title_lexicon service logic.
 def _score_title_lexicon(title: str) -> float:
     t = (title or "").lower()
     score = 0.0
@@ -224,6 +233,7 @@ def _score_title_lexicon(title: str) -> float:
     return score
 
 
+# _score_title_keyword_intensity service logic.
 def _score_title_keyword_intensity(title: str) -> float:
     """
     Lighter-weight fallback for very constrained environments.
@@ -235,6 +245,7 @@ def _score_title_keyword_intensity(title: str) -> float:
     return float(score)
 
 
+# _sentiment_pipeline_name service logic.
 def _sentiment_pipeline_name() -> str:
     try:
         return str(intelligence_router.get_sentiment_pipeline() or "lexicon").strip().lower()
@@ -242,6 +253,7 @@ def _sentiment_pipeline_name() -> str:
         return "lexicon"
 
 
+# _score_title service logic.
 def _score_title(title: str) -> float:
     """
     Sentiment routing entrypoint. Keeps news scoring decoupled from a single hardcoded method.
@@ -267,6 +279,7 @@ def _score_title(title: str) -> float:
     return _score_title_keyword_intensity(title)
 
 
+# _parse_dt service logic.
 def _parse_dt(s: str) -> Optional[datetime]:
     """
     GDELT uses formats like:
@@ -302,6 +315,7 @@ def _parse_dt(s: str) -> Optional[datetime]:
         return None
 
 
+# _rate_limit_take service logic.
 async def _rate_limit_take(name: str) -> None:
     """
     Optional limiter integration. If you don't have services/rate_limit.py yet,
@@ -315,6 +329,7 @@ async def _rate_limit_take(name: str) -> None:
         return
 
 
+# _newsitems_to_dicts service logic.
 def _newsitems_to_dicts(news: List[NewsItem]) -> List[dict]:
     out: List[dict] = []
     for n in news or []:
@@ -328,6 +343,7 @@ def _newsitems_to_dicts(news: List[NewsItem]) -> List[dict]:
     return out
 
 
+# _ensure_summary service logic.
 def _ensure_summary(doc: dict) -> dict:
     """
     Backfill summary for old cached docs that don't have it.
@@ -341,6 +357,7 @@ def _ensure_summary(doc: dict) -> dict:
     return doc
 
 
+# _normalize_symbol service logic.
 def _normalize_symbol(sym: str) -> str:
     s = (sym or "").strip().upper()
     # Common ticker normalization
@@ -351,6 +368,7 @@ def _normalize_symbol(sym: str) -> str:
     return s
 
 
+# _seed_symbols service logic.
 def _seed_symbols(symbols: Optional[List[str]]) -> List[str]:
     raw = [str(s) for s in (symbols or [])]
     cleaned = [_normalize_symbol(s) for s in raw if str(s).strip()]
@@ -363,6 +381,7 @@ def _seed_symbols(symbols: Optional[List[str]]) -> List[str]:
     return list(dict.fromkeys(fallback))
 
 
+# _dedupe_news_docs service logic.
 def _dedupe_news_docs(docs: List[dict]) -> List[dict]:
     seen: set[str] = set()
     out: List[dict] = []
@@ -379,6 +398,7 @@ def _dedupe_news_docs(docs: List[dict]) -> List[dict]:
     return out
 
 
+# _fetch_gdelt service logic.
 async def _fetch_gdelt(query: str, start_dt: datetime, max_items: int) -> List[Dict]:
     """
     Lowest-level GDELT fetch. Never raises. Returns [] on any failure.
@@ -439,10 +459,12 @@ async def _fetch_gdelt(query: str, start_dt: datetime, max_items: int) -> List[D
         return []
 
 
+# _fmt_gdelt_dt service logic.
 def _fmt_gdelt_dt(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S")
 
 
+# _parse_yahoo_rss_feed service logic.
 def _parse_yahoo_rss_feed(xml_text: str, symbol: str, max_items: int) -> List[Dict]:
     """
     Parse Yahoo Finance RSS payload and normalize to GDELT-like article dicts.
@@ -493,6 +515,7 @@ def _parse_yahoo_rss_feed(xml_text: str, symbol: str, max_items: int) -> List[Di
     return out
 
 
+# fetch_yahoo_rss_news service logic.
 async def fetch_yahoo_rss_news(symbol: str, max_items: int = 8) -> List[Dict]:
     """
     Fallback ticker news via Yahoo Finance RSS.
@@ -525,6 +548,7 @@ async def fetch_yahoo_rss_news(symbol: str, max_items: int = 8) -> List[Dict]:
         return []
 
 
+# fetch_gdelt_news service logic.
 async def fetch_gdelt_news(symbol: str, hours: int = 72, max_items: int = 15) -> List[Dict]:
     """
     Fetch news articles mentioning a symbol via GDELT DOC 2.1.
@@ -539,6 +563,7 @@ async def fetch_gdelt_news(symbol: str, hours: int = 72, max_items: int = 15) ->
     return await _fetch_gdelt(query=query, start_dt=start_dt, max_items=max_items)
 
 
+# fetch_gdelt_market_news service logic.
 async def fetch_gdelt_market_news(hours: int = 48, max_items: int = 25) -> List[Dict]:
     """
     Fetch market-wide finance news (not tied to a symbol).
@@ -554,6 +579,7 @@ async def fetch_gdelt_market_news(hours: int = 48, max_items: int = 25) -> List[
     return await _fetch_gdelt(query=query, start_dt=start_dt, max_items=max_items)
 
 
+# _article_to_doc service logic.
 def _article_to_doc(date: str, symbol: Optional[str], a: Dict) -> Optional[dict]:
     title = str(a.get("title") or "").strip()
     url = str(a.get("url") or "").strip()
@@ -586,6 +612,7 @@ def _article_to_doc(date: str, symbol: Optional[str], a: Dict) -> Optional[dict]
     return doc
 
 
+# refresh_news_for_symbols service logic.
 async def refresh_news_for_symbols(date: str, symbols: List[str]) -> List[NewsItem]:
     """
     Fetch and cache symbol news.
@@ -638,6 +665,7 @@ async def refresh_news_for_symbols(date: str, symbols: List[str]) -> List[NewsIt
     return out
 
 
+# refresh_market_news service logic.
 async def refresh_market_news(date: str) -> List[NewsItem]:
     """
     Fetch and cache market-wide news (symbol=None).
@@ -677,6 +705,7 @@ async def refresh_market_news(date: str) -> List[NewsItem]:
     return out
 
 
+# get_news_for_date service logic.
 def get_news_for_date(
     date: str,
     symbols: Optional[List[str]] = None,
@@ -721,6 +750,7 @@ def get_news_for_date(
     return out
 
 
+# _cache_is_fresh service logic.
 def _cache_is_fresh(date: str, ttl_hours: int) -> bool:
     """
     Determine if we already have fresh-enough news for this date.
@@ -741,6 +771,7 @@ def _cache_is_fresh(date: str, ttl_hours: int) -> bool:
     return age <= timedelta(hours=int(ttl_hours))
 
 
+# refresh_news_if_needed service logic.
 async def refresh_news_if_needed(date: str, symbols: List[str]) -> List[NewsItem]:
     """
     Ensure there is news for the date. This is the main "daily news" behavior:
@@ -780,6 +811,7 @@ async def refresh_news_if_needed(date: str, symbols: List[str]) -> List[NewsItem
     return refreshed
 
 
+# refresh_top_news_of_day service logic.
 async def refresh_top_news_of_day(date: str, symbols: Optional[List[str]] = None) -> List[NewsItem]:
     """
     Returns top dashboard news items for the date.
