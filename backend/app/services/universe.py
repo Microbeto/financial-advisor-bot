@@ -1,3 +1,4 @@
+# Structure: universe management service for index constituents, custom baskets, and date-scoped storage.
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
@@ -23,6 +24,7 @@ SP500_FALLBACK = [
 ]
 
 
+# _scrape_table_symbols service logic.
 def _scrape_table_symbols(url: str, col_name_candidates: List[str]) -> List[str]:
     if pd is None:
         return []
@@ -37,6 +39,7 @@ def _scrape_table_symbols(url: str, col_name_candidates: List[str]) -> List[str]
     return []
 
 
+# get_dow_symbols service logic.
 def get_dow_symbols() -> List[str]:
     override = get_universe_override("dow")
     if override:
@@ -53,6 +56,7 @@ def get_dow_symbols() -> List[str]:
         return DOW_30_FALLBACK[:]
 
 
+# get_sp500_symbols service logic.
 def get_sp500_symbols() -> List[str]:
     override = get_universe_override("sp500")
     if override:
@@ -68,6 +72,7 @@ def get_sp500_symbols() -> List[str]:
         return SP500_FALLBACK[:]
 
 
+# save_universe_for_date service logic.
 def save_universe_for_date(date: str, key: str, symbols: List[str], meta: Optional[Dict] = None) -> None:
     col = db.require_col(db.universe_cache_col, "universe_cache")
     key = str(key).lower().strip()
@@ -80,6 +85,7 @@ def save_universe_for_date(date: str, key: str, symbols: List[str], meta: Option
     )
 
 
+# get_universe_for_date service logic.
 def get_universe_for_date(date: str, key: str) -> List[str]:
     col = db.require_col(db.universe_cache_col, "universe_cache")
     key = str(key).lower().strip()
@@ -93,6 +99,7 @@ def get_universe_for_date(date: str, key: str) -> List[str]:
     return get_sp500_symbols()
 
 
+# set_universe_override service logic.
 def set_universe_override(key: str, symbols: List[str]) -> List[str]:
     key = str(key).lower().strip()
     vals = list(dict.fromkeys([str(s).upper().strip() for s in (symbols or []) if str(s).strip()]))
@@ -105,6 +112,7 @@ def set_universe_override(key: str, symbols: List[str]) -> List[str]:
     return vals
 
 
+# get_universe_override service logic.
 def get_universe_override(key: str) -> List[str]:
     key = str(key).lower().strip()
     try:
@@ -116,6 +124,7 @@ def get_universe_override(key: str) -> List[str]:
         return []
 
 
+# set_user_custom_universe service logic.
 def set_user_custom_universe(user_id: str, symbols: List[str]) -> List[str]:
     vals = list(dict.fromkeys([str(s).upper().strip() for s in (symbols or []) if str(s).strip()]))
     col = db.get_db()["user_universe"]
@@ -127,6 +136,7 @@ def set_user_custom_universe(user_id: str, symbols: List[str]) -> List[str]:
     return vals
 
 
+# get_user_custom_universe service logic.
 def get_user_custom_universe(user_id: str) -> List[str]:
     try:
         col = db.get_db()["user_universe"]
