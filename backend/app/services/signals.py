@@ -1,3 +1,4 @@
+# Structure: signal assembly pipeline combining market, news, risk, policy, and AI narrative outputs.
 from __future__ import annotations
 
 import asyncio
@@ -48,12 +49,14 @@ LLM_SUMMARY_HEADLINE_LIMIT = int(os.getenv("LLM_SUMMARY_HEADLINE_LIMIT", "12"))
 _gen_ai = GenerativeIntelligence()
 
 
+# _maybe_await service logic.
 async def _maybe_await(res: Any) -> Any:
     if asyncio.iscoroutine(res):
         return await res
     return res
 
 
+# _system_capability service logic.
 def _system_capability() -> str:
     cap = str(getattr(intelligence_router, "system_capability", "low") or "low").strip().lower()
     if cap not in ("low", "medium", "high"):
@@ -61,6 +64,7 @@ def _system_capability() -> str:
     return cap
 
 
+# _headline_list service logic.
 def _headline_list(news_items: List[Any]) -> List[str]:
     out: List[str] = []
     for item in news_items or []:
@@ -77,6 +81,7 @@ def _headline_list(news_items: List[Any]) -> List[str]:
     return out
 
 
+# _is_summary_placeholder service logic.
 def _is_summary_placeholder(text: Any) -> bool:
     summary = str(text or "").strip().lower()
     if not summary:
@@ -84,6 +89,7 @@ def _is_summary_placeholder(text: Any) -> bool:
     return "temporarily unavailable" in summary or "timed out" in summary or "inference" in summary
 
 
+# _generate_market_summary_if_enabled service logic.
 async def _generate_market_summary_if_enabled(news_items: List[Any], capability: str) -> str | None:
     if capability != "high":
         return None
@@ -108,10 +114,12 @@ async def _generate_market_summary_if_enabled(news_items: List[Any], capability:
         return None
 
 
+# _utc_iso_z service logic.
 def _utc_iso_z(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+# _is_doc_fresh service logic.
 def _is_doc_fresh(doc: dict, ttl_sec: int) -> bool:
     try:
         s = doc.get("cached_at") or doc.get("fetched_at")
@@ -124,6 +132,7 @@ def _is_doc_fresh(doc: dict, ttl_sec: int) -> bool:
         return False
 
 
+# _cap_symbols service logic.
 def _cap_symbols(user_role: str, symbols: List[str]) -> List[str]:
     out = list(dict.fromkeys([str(s).upper().strip() for s in (symbols or []) if str(s).strip()]))
     if user_role == "user":
@@ -131,6 +140,7 @@ def _cap_symbols(user_role: str, symbols: List[str]) -> List[str]:
     return out[: max(1, DASH_MAX_SYMBOLS_PRIVATE)]
 
 
+# _vol20_from_closes service logic.
 def _vol20_from_closes(closes: List[float]) -> float:
     if len(closes) < 22:
         return 0.0
@@ -160,6 +170,7 @@ def _vol20_from_closes(closes: List[float]) -> float:
     return float(var ** 0.5)
 
 
+# _momentum_from_closes service logic.
 def _momentum_from_closes(closes: List[float]) -> Tuple[float, float, float, float]:
     if len(closes) < 25:
         return (0.0, 0.0, 0.0, 0.0)
@@ -171,6 +182,7 @@ def _momentum_from_closes(closes: List[float]) -> Tuple[float, float, float, flo
     return (float(score), float(r5), float(r20), float(vol20))
 
 
+# _news_score_map service logic.
 def _news_score_map(news: List[NewsItem]) -> Dict[str, float]:
     m: Dict[str, float] = {}
     for n in news or []:
@@ -181,6 +193,7 @@ def _news_score_map(news: List[NewsItem]) -> Dict[str, float]:
     return m
 
 
+# _close_series_from_history service logic.
 async def _close_series_from_history(symbol: str, days: int) -> List[float]:
     h = await get_price_history(symbol, days=days)
     pts = h.get("points") or []
@@ -193,6 +206,7 @@ async def _close_series_from_history(symbol: str, days: int) -> List[float]:
     return closes
 
 
+# _fetch_closes_many service logic.
 async def _fetch_closes_many(symbols: List[str], days: int, concurrency: int) -> Dict[str, List[float]]:
     uniq = list(dict.fromkeys([str(s).upper().strip() for s in (symbols or []) if str(s).strip()]))
     if not uniq:
@@ -210,6 +224,7 @@ async def _fetch_closes_many(symbols: List[str], days: int, concurrency: int) ->
     return out
 
 
+# _compute_regime_from_closes service logic.
 async def _compute_regime_from_closes(closes_map: Dict[str, List[float]]) -> Regime:
     try:
         spy = closes_map.get("SPY") or []
@@ -230,6 +245,7 @@ async def _compute_regime_from_closes(closes_map: Dict[str, List[float]]) -> Reg
         return "neutral"
 
 
+# _rank_trends service logic.
 async def _rank_trends(
     date: str,
     symbols: List[str],
@@ -285,6 +301,7 @@ async def _rank_trends(
     return items
 
 
+# _read_cached_signals service logic.
 def _read_cached_signals(user_id: str, date: str) -> Dict[str, Any] | None:
     col = db.require_col(db.daily_signals_col, "daily_signals")
     doc = col.find_one({"user_id": user_id, "date": date})
@@ -295,11 +312,13 @@ def _read_cached_signals(user_id: str, date: str) -> Dict[str, Any] | None:
     return doc
 
 
+# _write_cached_signals service logic.
 def _write_cached_signals(user_id: str, date: str, payload: Dict[str, Any]) -> None:
     col = db.require_col(db.daily_signals_col, "daily_signals")
     _safe_cache_upsert(col, user_id=user_id, date=date, payload=payload)
 
 
+# _safe_cache_upsert service logic.
 def _safe_cache_upsert(col: Any, user_id: str, date: str, payload: Dict[str, Any]) -> None:
     doc = {"user_id": user_id, "date": date, **payload}
     try:
@@ -319,6 +338,7 @@ def _safe_cache_upsert(col: Any, user_id: str, date: str, payload: Dict[str, Any
         return
 
 
+# _take_top_unique service logic.
 def _take_top_unique(items: List[TrendItem], want: int, used: set[str]) -> List[TrendItem]:
     out: List[TrendItem] = []
     for it in items:
@@ -332,6 +352,7 @@ def _take_top_unique(items: List[TrendItem], want: int, used: set[str]) -> List[
     return out
 
 
+# _symbols_from_cached_signal_payload service logic.
 def _symbols_from_cached_signal_payload(sig: Dict[str, Any]) -> List[str]:
     symbols: List[str] = []
     for key in ("sp500_up", "sp500_down", "dow_up", "dow_down"):
@@ -344,6 +365,7 @@ def _symbols_from_cached_signal_payload(sig: Dict[str, Any]) -> List[str]:
     return list(dict.fromkeys(symbols))
 
 
+# _fill_names_for_items service logic.
 async def _fill_names_for_items(items: List[TrendItem]) -> None:
     async def one(it: TrendItem) -> None:
         try:
@@ -354,6 +376,7 @@ async def _fill_names_for_items(items: List[TrendItem]) -> None:
     await asyncio.gather(*(one(x) for x in items))
 
 
+# build_dashboard_for_user service logic.
 async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
     today = iso_date_utc()
     capability = _system_capability()
@@ -518,6 +541,7 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
     return resp
 
 
+# generate_daily_signals service logic.
 def generate_daily_signals() -> None:
     async def _run() -> None:
         users = db.require_col(db.users_col, "users")
