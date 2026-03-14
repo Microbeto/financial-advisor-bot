@@ -1,3 +1,4 @@
+# Structure: policy engine module defining hard access/action constraints from profile and regime inputs.
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,12 +8,14 @@ from .. import db
 from ..models import Regime, RiskProfile
 
 
+# PolicyDecision class and its related behavior.
 @dataclass(frozen=True)
 class PolicyDecision:
     allowed: bool
     reasons: List[str]
 
 
+# PolicyEngine class and its related behavior.
 class PolicyEngine:
     """
     Hard rules. This runs before you show signals or allow portfolio actions.
