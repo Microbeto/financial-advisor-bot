@@ -1,3 +1,4 @@
+# Structure: ML workflow orchestration for training, evaluation, tournament selection, and deployment.
 from __future__ import annotations
 
 import asyncio
@@ -64,6 +65,7 @@ ML_NLP_PIPELINE = os.getenv("ML_NLP_PIPELINE", "auto").strip().lower()  # auto|l
 ML_CASCADE_AMBIGUOUS_ABS = float(os.getenv("ML_CASCADE_AMBIGUOUS_ABS", "0.12"))
 
 
+# _finbert_candidates service logic.
 def _finbert_candidates() -> List[str]:
     raw = os.getenv("FINBERT_MODEL_CANDIDATES", "").strip()
     env_vals = [x.strip() for x in raw.split(",") if x.strip()] if raw else []
@@ -90,6 +92,7 @@ _RUNTIME_SETTINGS_DEFAULTS: Dict[str, Any] = {
 }
 
 
+# Block: defines the DataValidationError class and its related behavior.
 class DataValidationError(RuntimeError):
     def __init__(self, message: str, *, code: str = "data_validation_failed", details: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(message)
@@ -126,6 +129,7 @@ BASE_FEATURE_NAMES: Tuple[str, ...] = (
 )
 
 
+# _ml_log service logic.
 def _ml_log(message: str) -> None:
     enabled = os.getenv("ML_PIPELINE_VERBOSE", "1").strip().lower() not in ("0", "false", "no", "off")
     if not enabled:
@@ -134,6 +138,7 @@ def _ml_log(message: str) -> None:
     print(f"[ml][{ts}] {message}", flush=True)
 
 
+# _alert_admin_ml_issue service logic.
 def _alert_admin_ml_issue(message: str, details: Optional[Dict[str, Any]] = None) -> None:
     payload = details or {}
     _ml_log(f"ADMIN ALERT: {message} | {payload}")
@@ -154,6 +159,7 @@ def _alert_admin_ml_issue(message: str, details: Optional[Dict[str, Any]] = None
         return
 
 
+# _load_xgboost_classifier service logic.
 def _load_xgboost_classifier() -> Any:
     try:
         mod = importlib.import_module("xgboost")
@@ -162,6 +168,7 @@ def _load_xgboost_classifier() -> Any:
         return None
 
 
+# _load_lightgbm_classifier service logic.
 def _load_lightgbm_classifier() -> Any:
     try:
         mod = importlib.import_module("lightgbm")
@@ -170,18 +177,22 @@ def _load_lightgbm_classifier() -> Any:
         return None
 
 
+# _utc_now service logic.
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# _to_iso service logic.
 def _to_iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+# _iso_yesterday_utc service logic.
 def _iso_yesterday_utc() -> str:
     return (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
 
 
+# _model_store_dir service logic.
 def _model_store_dir() -> Path:
     root = os.getenv("MODEL_STORE_DIR", str(Path(__file__).resolve().parents[2] / "model_store"))
     p = Path(root)
@@ -189,10 +200,12 @@ def _model_store_dir() -> Path:
     return p
 
 
+# _slug service logic.
 def _slug(s: str) -> str:
     return "".join(ch.lower() if ch.isalnum() else "_" for ch in (s or "")).strip("_")
 
 
+# _sentiment_score_text service logic.
 def _sentiment_score_text(text: str) -> float:
     pos = [
         "beat",
@@ -231,6 +244,7 @@ def _sentiment_score_text(text: str) -> float:
     return float(score / max(len(pos), len(neg)))
 
 
+# _volatility service logic.
 def _volatility(values: List[float], lookback: int = 20) -> float:
     if len(values) < lookback + 1:
         return 0.0
@@ -243,6 +257,7 @@ def _volatility(values: List[float], lookback: int = 20) -> float:
     return float(np.std(rets, ddof=1))
 
 
+# _technical_features service logic.
 def _technical_features(closes: List[float]) -> List[float]:
     if len(closes) < 25:
         return [0.0, 0.0, 0.0, 0.0, 0.0]
@@ -255,6 +270,7 @@ def _technical_features(closes: List[float]) -> List[float]:
     return [float(r1), float(r5), float(r20), float(vol20), float(momentum)]
 
 
+# _point_date service logic.
 def _point_date(p: Dict[str, Any], fallback: str) -> str:
     t_raw = p.get("t")
     if t_raw is None:
@@ -272,6 +288,7 @@ def _point_date(p: Dict[str, Any], fallback: str) -> str:
         return fallback
 
 
+# Block: defines the _FinBertInferencer class and its related behavior.
 class _FinBertInferencer:
     def __init__(self) -> None:
         self._ready = False
@@ -377,6 +394,7 @@ class _FinBertInferencer:
 _FINBERT: Optional[_FinBertInferencer] = None
 
 
+# _get_finbert service logic.
 def _get_finbert() -> _FinBertInferencer:
     global _FINBERT
     if _FINBERT is None:
@@ -384,6 +402,7 @@ def _get_finbert() -> _FinBertInferencer:
     return _FINBERT
 
 
+# Block: defines the _DailyNewsFeatures class and its related behavior.
 @dataclass
 class _DailyNewsFeatures:
     symbol_sentiment: Dict[str, float]
@@ -393,6 +412,7 @@ class _DailyNewsFeatures:
     nlp_pipeline: str = "lexicon"
 
 
+# _normalize_nlp_pipeline service logic.
 def _normalize_nlp_pipeline(pipeline: Optional[str]) -> str:
     v = str(pipeline or "").strip().lower()
     if v in ("lexicon", "finbert", "cascade"):
@@ -400,6 +420,7 @@ def _normalize_nlp_pipeline(pipeline: Optional[str]) -> str:
     return "lexicon"
 
 
+# _active_nlp_pipeline service logic.
 def _active_nlp_pipeline() -> str:
     forced = _normalize_nlp_pipeline(ML_NLP_PIPELINE)
     if forced != "lexicon" or str(ML_NLP_PIPELINE).strip().lower() == "lexicon":
@@ -413,6 +434,7 @@ def _active_nlp_pipeline() -> str:
         return "lexicon"
 
 
+# _score_texts_with_pipeline service logic.
 def _score_texts_with_pipeline(texts: Sequence[str], pipeline: str) -> List[float]:
     cleaned = [str(t or "").strip() for t in texts if str(t or "").strip()]
     if not cleaned:
@@ -438,6 +460,7 @@ def _score_texts_with_pipeline(texts: Sequence[str], pipeline: str) -> List[floa
     return out.tolist()
 
 
+# _macro_term_features service logic.
 def _macro_term_features(texts: Sequence[str]) -> List[float]:
     merged = " ".join([str(t or "").lower() for t in texts])
     denom = float(max(1, len(texts)))
@@ -447,12 +470,14 @@ def _macro_term_features(texts: Sequence[str]) -> List[float]:
     return vals
 
 
+# _news_text service logic.
 def _news_text(item: Any) -> str:
     title = str(getattr(item, "title", "") or "")
     summary = str(getattr(item, "summary", "") or "")
     return f"{title}. {summary}".strip()
 
 
+# _daily_news_features service logic.
 def _daily_news_features(date: str, symbols: Sequence[str], nlp_pipeline: Optional[str] = None) -> _DailyNewsFeatures:
     syms = list(dict.fromkeys([str(s).upper().strip() for s in symbols if str(s).strip()]))
     active_pipeline = _normalize_nlp_pipeline(nlp_pipeline or _active_nlp_pipeline())
@@ -494,6 +519,7 @@ def _daily_news_features(date: str, symbols: Sequence[str], nlp_pipeline: Option
     )
 
 
+# _validate_news_coverage_or_raise service logic.
 def _validate_news_coverage_or_raise(daily_ctx: Dict[str, _DailyNewsFeatures], symbols: Sequence[str]) -> Dict[str, Any]:
     total_days = int(len(daily_ctx))
     missing_days = int(sum(1 for ctx in daily_ctx.values() if int(getattr(ctx, "news_item_count", 0)) <= 0))
@@ -531,6 +557,7 @@ def _validate_news_coverage_or_raise(daily_ctx: Dict[str, _DailyNewsFeatures], s
     return report
 
 
+# _rolling_daily_volatility service logic.
 def _rolling_daily_volatility(closes: Sequence[float], idx: int, lookback: int = 20) -> float:
     if idx <= 1:
         return 0.0
@@ -548,6 +575,7 @@ def _rolling_daily_volatility(closes: Sequence[float], idx: int, lookback: int =
     return float(np.std(np.asarray(rets, dtype=float), ddof=1))
 
 
+# _triple_barrier_label service logic.
 def _triple_barrier_label(closes: Sequence[float], idx: int, horizon: int, tp: float, sl: float) -> int:
     if idx < 0 or idx >= len(closes) - 1:
         return 0
@@ -573,6 +601,7 @@ def _triple_barrier_label(closes: Sequence[float], idx: int, horizon: int, tp: f
     return 1 if terminal_ret >= 0 else 0
 
 
+# build_training_matrices service logic.
 async def build_training_matrices(
     stock_basket: List[str],
     lookback_days: int,
@@ -695,6 +724,7 @@ async def build_training_matrices(
     }
 
 
+# _evaluate_binary service logic.
 def _evaluate_binary(y_true: np.ndarray, y_pred: np.ndarray, y_prob: Optional[np.ndarray] = None) -> Dict[str, float]:
     metrics = {
         "accuracy": float(accuracy_score(y_true, y_pred)),
@@ -711,6 +741,7 @@ def _evaluate_binary(y_true: np.ndarray, y_pred: np.ndarray, y_prob: Optional[np
     return metrics
 
 
+# _weighted_score service logic.
 def _weighted_score(metrics: Dict[str, float]) -> float:
     return float(
         (0.40 * metrics.get("f1", 0.0))
@@ -720,6 +751,7 @@ def _weighted_score(metrics: Dict[str, float]) -> float:
     )
 
 
+# _data_completeness_from_news_coverage service logic.
 def _data_completeness_from_news_coverage(news_coverage: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     nc = dict(news_coverage or {})
     window_days = int(nc.get("window_days") or 0)
@@ -745,6 +777,7 @@ def _data_completeness_from_news_coverage(news_coverage: Optional[Dict[str, Any]
     }
 
 
+# _predict_proba_or_hard service logic.
 def _predict_proba_or_hard(model: Any, x: np.ndarray) -> np.ndarray:
     if hasattr(model, "predict_proba"):
         try:
@@ -757,6 +790,7 @@ def _predict_proba_or_hard(model: Any, x: np.ndarray) -> np.ndarray:
     return np.where(preds > 0, 1.0, 0.0)
 
 
+# _family_from_algorithm service logic.
 def _family_from_algorithm(algorithm: str) -> str:
     algo = (algorithm or "").lower()
     if "tournament" in algo:
@@ -774,6 +808,7 @@ def _family_from_algorithm(algorithm: str) -> str:
     return "other"
 
 
+# _rank_models service logic.
 def _rank_models(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     ranked = sorted(items, key=lambda x: float(x.get("score", 0.0)), reverse=True)
     for i, item in enumerate(ranked, start=1):
@@ -782,10 +817,12 @@ def _rank_models(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return ranked
 
 
+# _artifact_path service logic.
 def _artifact_path(model_id: str) -> Path:
     return _model_store_dir() / f"{_slug(model_id)}.joblib"
 
 
+# _save_model_artifact service logic.
 def _save_model_artifact(model_id: str, model_obj: Any) -> Optional[str]:
     if joblib is None:
         return None
@@ -794,6 +831,7 @@ def _save_model_artifact(model_id: str, model_obj: Any) -> Optional[str]:
     return str(p)
 
 
+# _delete_artifact service logic.
 def _delete_artifact(artifact_path: Optional[str]) -> None:
     if not artifact_path:
         return
@@ -805,18 +843,22 @@ def _delete_artifact(artifact_path: Optional[str]) -> None:
         return
 
 
+# _registry_col service logic.
 def _registry_col():
     return db.require_col(db.ml_models_col, "ml_models")
 
 
+# _runs_col service logic.
 def _runs_col():
     return db.require_col(db.ml_model_runs_col, "ml_model_runs")
 
 
+# _runtime_settings_col service logic.
 def _runtime_settings_col():
     return db.require_col(db.ml_runtime_settings_col, "ml_runtime_settings")
 
 
+# get_ml_runtime_settings service logic.
 def get_ml_runtime_settings() -> Dict[str, Any]:
     col = _runtime_settings_col()
     doc = col.find_one({"key": "pipeline"}) or {}
@@ -838,6 +880,7 @@ def get_ml_runtime_settings() -> Dict[str, Any]:
     }
 
 
+# update_ml_runtime_settings service logic.
 def update_ml_runtime_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     current = get_ml_runtime_settings()
     allowed = {
@@ -878,6 +921,7 @@ def update_ml_runtime_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
+# _store_model_record service logic.
 def _store_model_record(item: Dict[str, Any], run_id: str) -> Dict[str, Any]:
     model_id = f"{item['algorithm']}_{uuid.uuid4().hex[:10]}"
     artifact_path = _save_model_artifact(model_id, item["model"])
@@ -913,6 +957,7 @@ def _store_model_record(item: Dict[str, Any], run_id: str) -> Dict[str, Any]:
     return doc
 
 
+# _doc_to_model_info service logic.
 def _doc_to_model_info(doc: Dict[str, Any]) -> MLModelInfo:
     resolved_news_ratio = _resolve_news_coverage_ratio(doc)
     raw_feature = str(doc.get("feature_type") or "numeric").lower()
@@ -935,6 +980,7 @@ def _doc_to_model_info(doc: Dict[str, Any]) -> MLModelInfo:
     )
 
 
+# _resolve_news_coverage_ratio service logic.
 def _resolve_news_coverage_ratio(doc: Dict[str, Any]) -> Optional[float]:
     top_level = doc.get("news_coverage_ratio")
     if top_level is not None:
@@ -982,6 +1028,7 @@ def _resolve_news_coverage_ratio(doc: Dict[str, Any]) -> Optional[float]:
         return None
 
 
+# _resolve_model_nlp_pipeline service logic.
 def _resolve_model_nlp_pipeline(doc: Dict[str, Any]) -> str:
     top_level = str(doc.get("nlp_pipeline") or "").strip().lower()
     if top_level in ("lexicon", "finbert", "cascade"):
@@ -997,6 +1044,7 @@ def _resolve_model_nlp_pipeline(doc: Dict[str, Any]) -> str:
     return "finbert"
 
 
+# _pipeline_filter_query service logic.
 def _pipeline_filter_query(nlp_pipeline: Optional[str], include_legacy_finbert: bool = True) -> Dict[str, Any]:
     if nlp_pipeline is None:
         return {}
@@ -1013,6 +1061,7 @@ def _pipeline_filter_query(nlp_pipeline: Optional[str], include_legacy_finbert: 
     return {"nlp_pipeline": p}
 
 
+# list_models service logic.
 def list_models(nlp_pipeline: Optional[str] = None) -> List[MLModelInfo]:
     col = _registry_col()
     docs = list(col.find(_pipeline_filter_query(nlp_pipeline)).sort([("rank", 1), ("score", -1), ("created_at", -1)]))
@@ -1023,6 +1072,7 @@ def list_models(nlp_pipeline: Optional[str] = None) -> List[MLModelInfo]:
     return out
 
 
+# get_tournament_competitor_stats service logic.
 def get_tournament_competitor_stats(model_id: Optional[str] = None) -> Dict[str, Any]:
     doc = _selected_or_latest_model(model_id)
     if not doc:
@@ -1083,6 +1133,7 @@ def get_tournament_competitor_stats(model_id: Optional[str] = None) -> Dict[str,
     }
 
 
+# get_model_feature_importances service logic.
 def get_model_feature_importances(model_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Returns feature importances for the selected/latest model.
@@ -1193,6 +1244,7 @@ def get_model_feature_importances(model_id: Optional[str] = None) -> Dict[str, A
     }
 
 
+# ensure_selected_model_exists service logic.
 def ensure_selected_model_exists() -> Optional[str]:
     col = _registry_col()
     selected = col.find_one({"is_selected": True}, sort=[("score", -1), ("created_at", -1)])
@@ -1209,6 +1261,7 @@ def ensure_selected_model_exists() -> Optional[str]:
     return model_id
 
 
+# select_best_models service logic.
 def select_best_models(top_k: int = 1, nlp_pipeline: Optional[str] = None) -> MLSelectionResponse:
     col = _registry_col()
     filt = _pipeline_filter_query(nlp_pipeline)
@@ -1228,6 +1281,7 @@ def select_best_models(top_k: int = 1, nlp_pipeline: Optional[str] = None) -> ML
     return MLSelectionResponse(selected_model_id=(ids[0] if ids else None), ranked_model_ids=[str(d.get("model_id")) for d in ranked])
 
 
+# _parse_iso_utc service logic.
 def _parse_iso_utc(value: str) -> Optional[datetime]:
     s = str(value or "").strip()
     if not s:
@@ -1241,6 +1295,7 @@ def _parse_iso_utc(value: str) -> Optional[datetime]:
         return None
 
 
+# backfill_model_nlp_pipeline service logic.
 def backfill_model_nlp_pipeline(
     dry_run: bool = True,
     limit: int = 0,
@@ -1342,6 +1397,7 @@ def backfill_model_nlp_pipeline(
     }
 
 
+# _select_prune_candidates service logic.
 def _select_prune_candidates(docs: List[Dict[str, Any]], max_models: int) -> List[Dict[str, Any]]:
     if len(docs) < int(max_models):
         return []
@@ -1349,6 +1405,7 @@ def _select_prune_candidates(docs: List[Dict[str, Any]], max_models: int) -> Lis
     return [d for d in docs if not bool(d.get("is_selected", False))]
 
 
+# prune_underperforming_models service logic.
 def prune_underperforming_models(min_f1: float, min_accuracy: float) -> MLPruneResponse:
     col = _registry_col()
     docs = list(col.find({}).sort([("is_selected", -1), ("score", -1), ("created_at", -1)]))
@@ -1391,6 +1448,7 @@ def prune_underperforming_models(min_f1: float, min_accuracy: float) -> MLPruneR
     return MLPruneResponse(deleted_model_ids=deleted)
 
 
+# _selected_or_latest_model service logic.
 def _selected_or_latest_model(model_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     col = _registry_col()
     if model_id:
@@ -1399,6 +1457,7 @@ def _selected_or_latest_model(model_id: Optional[str] = None) -> Optional[Dict[s
     return col.find_one({"is_selected": True}, sort=[("score", -1), ("created_at", -1)])
 
 
+# _load_model service logic.
 def _load_model(doc: Dict[str, Any]) -> Any:
     if joblib is None:
         raise RuntimeError("joblib is required for persisted model loading")
@@ -1413,6 +1472,7 @@ def _load_model(doc: Dict[str, Any]) -> Any:
     return joblib.load(p)
 
 
+# _algo_factories service logic.
 def _algo_factories(random_seed: int) -> List[Tuple[str, Any]]:
     jobs: List[Tuple[str, Any]] = [
         ("ann_relu", lambda: MLPClassifier(hidden_layer_sizes=(64, 32), activation="relu", max_iter=700, random_state=random_seed)),
@@ -1457,12 +1517,14 @@ def _algo_factories(random_seed: int) -> List[Tuple[str, Any]]:
     return jobs
 
 
+# _safe_test_size service logic.
 def _safe_test_size(n_samples: int, req_test_size: float, n_splits: int) -> int:
     candidate = max(20, int(n_samples * max(0.10, min(0.35, float(req_test_size)))))
     max_allowed = max(10, (n_samples // max(2, n_splits + 1)) - 1)
     return max(10, min(candidate, max_allowed))
 
 
+# _build_walk_forward_splits service logic.
 def _build_walk_forward_splits(
     n_samples: int,
     req_test_size: float,
@@ -1496,6 +1558,7 @@ def _build_walk_forward_splits(
     return out
 
 
+# _fit_score_over_walk_forward service logic.
 def _fit_score_over_walk_forward(
     algorithm: str,
     factory: Any,
@@ -1544,6 +1607,7 @@ def _fit_score_over_walk_forward(
     }
 
 
+# _train_stacking_meta service logic.
 def _train_stacking_meta(
     X: np.ndarray,
     y: np.ndarray,
@@ -1591,6 +1655,7 @@ def _train_stacking_meta(
     }
 
 
+# _predict_stacking_model service logic.
 def _predict_stacking_model(model_bundle: Dict[str, Any], X: np.ndarray) -> np.ndarray:
     names = list(model_bundle.get("base_model_names") or [])
     base_models = dict(model_bundle.get("base_models") or {})
@@ -1609,6 +1674,7 @@ def _predict_stacking_model(model_bundle: Dict[str, Any], X: np.ndarray) -> np.n
     return _predict_proba_or_hard(meta, X_meta)
 
 
+# _predict_tournament_model service logic.
 def _predict_tournament_model(model_bundle: Dict[str, Any], X: np.ndarray) -> np.ndarray:
     names = list(model_bundle.get("base_model_names") or [])
     base_models = dict(model_bundle.get("base_models") or {})
@@ -1644,6 +1710,7 @@ def _predict_tournament_model(model_bundle: Dict[str, Any], X: np.ndarray) -> np
     return np.clip((alloc_arr + 1.0) / 2.0, 0.0, 1.0)
 
 
+# _train_multi_armed_tournament service logic.
 def _train_multi_armed_tournament(
     X: np.ndarray,
     y: np.ndarray,
@@ -1731,6 +1798,7 @@ def _train_multi_armed_tournament(
     }
 
 
+# predict_for_basket service logic.
 async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, model_id: Optional[str] = None) -> MLPredictionResponse:
     symbols = list(dict.fromkeys([(s or "").upper().strip() for s in stock_basket if (s or "").strip()]))
     items: List[MLPredictionItem] = []
@@ -1829,6 +1897,7 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
     return MLPredictionResponse(model_id=(f"mix[{mix_id}]" if mix_id else "mix[selected]"), items=items)
 
 
+# deploy_neural_network service logic.
 async def deploy_neural_network(model_id: Optional[str] = None) -> MLDeployResponse:
     col = _registry_col()
     query: Dict[str, Any]
@@ -1847,6 +1916,7 @@ async def deploy_neural_network(model_id: Optional[str] = None) -> MLDeployRespo
     return MLDeployResponse(deployed_model_id=mid)
 
 
+# train_models_async service logic.
 async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
     pipeline_t0 = time.perf_counter()
     run_id = f"run_{uuid.uuid4().hex[:12]}"
