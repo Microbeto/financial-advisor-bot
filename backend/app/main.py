@@ -187,6 +187,13 @@ async def lifespan(app: FastAPI):
         pass
 
     try:
+        from .ml.visualizations import run_startup_visualizations
+        from .services.ml_workflow import _model_store_dir
+        run_startup_visualizations(_model_store_dir())
+    except Exception:
+        pass
+
+    try:
         bootstrap_admin_if_configured()
     except Exception:
         pass
