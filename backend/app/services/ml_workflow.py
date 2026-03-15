@@ -2043,11 +2043,15 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
 
     completed: List[Dict[str, Any]] = []
     failed_jobs = 0
+    # OOF probability arrays per algorithm – collected for visualization (Chart 2)
+    oof_probs_for_viz: Dict[str, np.ndarray] = {}
 
     for name, factory in base_jobs:
         t0 = time.perf_counter()
         try:
-            res = _fit_score_over_walk_forward(name, factory, Xn, y, splits)
+            oof_col = np.full(Xn.shape[0], np.nan, dtype=float)
+            res = _fit_score_over_walk_forward(name, factory, Xn, y, splits, oof_collector=oof_col)
+            oof_probs_for_viz[name] = oof_col
             completed.append(res)
             m = res.get("metrics") or {}
             _ml_log(
@@ -2113,6 +2117,55 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
     _ml_log(
         f"pipeline completed | run_id={run_id} | total_time={pipeline_elapsed:.2f}s | trained={len(infos)} | selected={selection.selected_model_id or 'none'} | pruned={len(prune.deleted_model_ids)}"
     )
+
+    # ── Post-training visualizations ──────────────────────────────────────────
+    try:
+        from ..ml.visualizations import run_training_visualizations
+        # Collect stacking-meta OOF probs from the stacking result if it was trained
+        stacking_item = next(
+            (d for d in completed if str(d.get("algorithm") or "") == "stacking_meta"), None
+        )
+        if stacking_item:
+            stk_model = stacking_item.get("model") or {}
+            base_names = list(stk_model.get("base_model_names") or [])
+            base_models_map = dict(stk_model.get("base_models") or {})
+            meta_model = stk_model.get("meta_model")
+            if base_names and base_models_map and meta_model is not None:
+                oof_cols = [
+                    oof_probs_for_viz.get(nm, np.full(Xn.shape[0], np.nan, dtype=float))
+                    for nm in base_names
+                ]
+                valid = ~np.isnan(np.column_stack(oof_cols)).any(axis=1)
+                if np.any(valid):
+                    stacking_oof = np.full(Xn.shape[0], np.nan, dtype=float)
+                    X_meta = np.column_stack(oof_cols)[valid]
+                    stacking_oof[valid] = meta_model.predict_proba(X_meta)[:, 1]
+                    oof_probs_for_viz["stacking_meta"] = stacking_oof
+
+        tournament_model_bundle = next(
+            (d.get("model") for d in completed if str(d.get("algorithm") or "") == "multi_armed_tournament"),
+            None,
+        )
+        vis_ctx: Dict[str, Any] = {
+            "run_id": run_id,
+            "Xn": Xn,
+            "y": y,
+            "actual_returns": actual_returns,
+            "sample_dates": sample_dates,
+            "oof_probs": oof_probs_for_viz,
+            "competitor_stats": (
+                tournament_model_bundle.get("competitor_stats") if isinstance(tournament_model_bundle, dict) else {}
+            ),
+            "winner_name": (
+                tournament_model_bundle.get("winner_name") if isinstance(tournament_model_bundle, dict) else ""
+            ),
+            "tp_barrier": float(runtime.get("tp_barrier", 2.0)),
+            "sl_barrier": float(runtime.get("sl_barrier", 2.0)),
+            "nlp_pipeline": trained_nlp_pipeline,
+        }
+        run_training_visualizations(vis_ctx, _model_store_dir())
+    except Exception as _viz_exc:
+        _ml_log(f"visualization generation skipped: {_viz_exc}")
 
     return MLTrainResponse(
         run_id=run_id,
