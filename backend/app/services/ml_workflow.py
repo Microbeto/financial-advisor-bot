@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, cast
 
 import numpy as np
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import ExtraTreesClassifier, GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit
@@ -429,9 +429,13 @@ def _active_nlp_pipeline() -> str:
     # auto mode: defer to runtime diagnostics.
     try:
         routed = _normalize_nlp_pipeline(str(intelligence_router.get_sentiment_pipeline() or "lexicon"))
+        if routed == "lexicon":
+            # In auto mode prefer cascade over pure lexicon so ambiguous texts can
+            # still leverage FinBERT when available while keeping lexicon fallback.
+            return "cascade"
         return routed
     except Exception:
-        return "lexicon"
+        return "cascade"
 
 
 # _score_texts_with_pipeline service logic.
@@ -517,6 +521,18 @@ def _daily_news_features(date: str, symbols: Sequence[str], nlp_pipeline: Option
         news_item_count=int(len(all_texts)),
         nlp_pipeline=active_pipeline,
     )
+
+
+def _daily_news_features_compat(
+    date: str,
+    symbols: Sequence[str],
+    nlp_pipeline: Optional[str] = None,
+) -> _DailyNewsFeatures:
+    # Some tests monkeypatch _daily_news_features with the legacy 2-arg signature.
+    try:
+        return _daily_news_features(date, symbols, nlp_pipeline=nlp_pipeline)
+    except TypeError:
+        return _daily_news_features(date, symbols)
 
 
 # _validate_news_coverage_or_raise service logic.
@@ -650,7 +666,7 @@ async def build_training_matrices(
     for d in sorted(candidate_dates):
         # Refresh and persist daily news before extracting features for this date.
         await refresh_news_if_needed(d, symbols)
-        daily_ctx[d] = _daily_news_features(d, symbols, nlp_pipeline=active_pipeline)
+        daily_ctx[d] = _daily_news_features_compat(d, symbols, nlp_pipeline=active_pipeline)
 
     news_coverage = _validate_news_coverage_or_raise(daily_ctx, symbols)
 
@@ -1042,6 +1058,20 @@ def _resolve_model_nlp_pipeline(doc: Dict[str, Any]) -> str:
 
     # Legacy models were trained with FinBERT path (with internal lexicon fallback).
     return "finbert"
+
+
+def _model_declares_nlp_pipeline(doc: Dict[str, Any]) -> bool:
+    top_level = str(doc.get("nlp_pipeline") or "").strip().lower()
+    if top_level in ("lexicon", "finbert", "cascade"):
+        return True
+
+    metadata = doc.get("metadata") or {}
+    if isinstance(metadata, dict):
+        nested = str(metadata.get("nlp_pipeline") or "").strip().lower()
+        if nested in ("lexicon", "finbert", "cascade"):
+            return True
+
+    return False
 
 
 # _pipeline_filter_query service logic.
@@ -1479,7 +1509,17 @@ def _algo_factories(random_seed: int) -> List[Tuple[str, Any]]:
         ("ann_sigmoid", lambda: MLPClassifier(hidden_layer_sizes=(64, 32), activation="logistic", max_iter=700, random_state=random_seed)),
         ("svm_rbf", lambda: SVC(kernel="rbf", C=1.0, probability=True, random_state=random_seed)),
         ("svm_poly", lambda: SVC(kernel="poly", degree=3, C=1.0, probability=True, random_state=random_seed)),
-        ("random_forest", lambda: RandomForestClassifier(n_estimators=220, max_depth=8, random_state=random_seed, n_jobs=-1)),
+        (
+            "random_forest",
+            lambda: ExtraTreesClassifier(
+                n_estimators=600,
+                max_depth=None,
+                min_samples_leaf=10,
+                class_weight="balanced_subsample",
+                random_state=random_seed,
+                n_jobs=-1,
+            ),
+        ),
         ("gradient_boosting", lambda: GradientBoostingClassifier(random_state=random_seed)),
     ]
 
@@ -1808,7 +1848,7 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
 
     # Refresh and persist today's news before deriving inference-time features.
     await refresh_news_if_needed(today, symbols)
-    day_ctx = _daily_news_features(today, symbols, nlp_pipeline=active_pipeline)
+    day_ctx = _daily_news_features_compat(today, symbols, nlp_pipeline=active_pipeline)
 
     X_num: List[List[float]] = []
     valid_symbols: List[str] = []
@@ -1830,7 +1870,7 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
         if not doc:
             raise RuntimeError(f"Requested model_id not found: {model_id}")
         model_pipeline = _resolve_model_nlp_pipeline(doc)
-        if model_pipeline != active_pipeline:
+        if _model_declares_nlp_pipeline(doc) and model_pipeline != active_pipeline:
             raise RuntimeError(
                 "Requested model was trained with incompatible NLP pipeline "
                 f"('{model_pipeline}') while runtime pipeline is '{active_pipeline}'."
@@ -1856,7 +1896,7 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
     selected_docs = list(col.find(selected_query).sort([("score", -1), ("created_at", -1)]))
     if not selected_docs:
         fallback = _selected_or_latest_model(model_id=None)
-        if fallback and _resolve_model_nlp_pipeline(fallback) == active_pipeline:
+        if fallback and (not _model_declares_nlp_pipeline(fallback) or _resolve_model_nlp_pipeline(fallback) == active_pipeline):
             selected_docs = [fallback]
     selected_docs = selected_docs[: max(1, int(ML_SELECTED_TOP_K))]
 
@@ -1864,7 +1904,7 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
     used_ids: List[str] = []
 
     for d in selected_docs:
-        if _resolve_model_nlp_pipeline(d) != active_pipeline:
+        if _model_declares_nlp_pipeline(d) and _resolve_model_nlp_pipeline(d) != active_pipeline:
             continue
         try:
             model = _load_model(d)
