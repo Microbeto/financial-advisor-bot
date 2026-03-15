@@ -9,13 +9,20 @@ import { StockBackground } from "@/components/stock-background";
 
 function SettingsIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
       <path
-        d="M11.25 3c-.41 0-.77.25-.92.63l-.52 1.3a1 1 0 0 1-.76.62l-1.38.22a1 1 0 0 0-.67.44l-1 1.5a1 1 0 0 0 .05 1.17l.86 1.1a1 1 0 0 1 .16.9l-.4 1.33a1 1 0 0 0 .25.97l1.1 1.1a1 1 0 0 0 .97.25l1.33-.4a1 1 0 0 1 .9.16l1.1.86a1 1 0 0 0 1.17.05l1.5-1a1 1 0 0 0 .44-.67l.22-1.38a1 1 0 0 1 .62-.76l1.3-.52A1 1 0 0 0 21 11.25v-1.5a1 1 0 0 0-.63-.92l-1.3-.52a1 1 0 0 1-.62-.76l-.22-1.38a1 1 0 0 0-.44-.67l-1.5-1a1 1 0 0 0-1.17.05l-1.1.86a1 1 0 0 1-.9.16l-1.33-.4A1 1 0 0 0 11.25 3Z"
-        fill="currentColor"
-        opacity="0.8"
+        d="M14.5 3.5 15 5.2a1 1 0 0 0 .8.7l1.8.3a1 1 0 0 1 .7.4l1.2 1.6a1 1 0 0 1 .1.8l-.7 1.7a1 1 0 0 0 0 .9l.7 1.7a1 1 0 0 1-.1.8l-1.2 1.6a1 1 0 0 1-.7.4l-1.8.3a1 1 0 0 0-.8.7l-.5 1.7a1 1 0 0 1-.6.6l-1.7.5a1 1 0 0 1-.8-.1l-1.6-1.2a1 1 0 0 0-.9 0l-1.6 1.2a1 1 0 0 1-.8.1l-1.7-.5a1 1 0 0 1-.6-.6l-.5-1.7a1 1 0 0 0-.8-.7l-1.8-.3a1 1 0 0 1-.7-.4l-1.2-1.6a1 1 0 0 1-.1-.8l.7-1.7a1 1 0 0 0 0-.9l-.7-1.7a1 1 0 0 1 .1-.8l1.2-1.6a1 1 0 0 1 .7-.4l1.8-.3a1 1 0 0 0 .8-.7l.5-1.7a1 1 0 0 1 .6-.6l1.7-.5a1 1 0 0 1 .8.1l1.6 1.2a1 1 0 0 0 .9 0l1.6-1.2a1 1 0 0 1 .8-.1l1.7.5a1 1 0 0 1 .6.6Z"
       />
-      <circle cx="12" cy="12" r="3.25" fill="currentColor" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
   );
 }
@@ -78,7 +85,7 @@ function TopNav() {
                     : "border-slate-700 bg-slate-900 hover:border-sky-500 hover:bg-slate-800",
                 ].join(" ")}
               >
-                <SettingsIcon className="h-4 w-4" />
+                <SettingsIcon className="h-5 w-5" />
               </Link>
 
               {/* Admin panel link: only if signed in AND role is admin */}
