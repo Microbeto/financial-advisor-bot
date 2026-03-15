@@ -220,6 +220,16 @@ async function checkPortInUse(port) {
   }
 }
 
+async function checkFrontendPortInUse(port) {
+  const url = `http://127.0.0.1:${port}/`;
+  try {
+    const r = await httpGet(url);
+    return { inUse: true, status: r.status };
+  } catch {
+    return { inUse: false, status: 0 };
+  }
+}
+
 let shuttingDown = false;
 
 async function shutdown(children, exitCode = 0) {
@@ -325,16 +335,21 @@ async function main() {
     PORT: String(FRONTEND_PORT),
   };
 
-  log("[frontend] starting: npm run dev (cwd=frontend)");
+  const frontendPortState = await checkFrontendPortInUse(FRONTEND_PORT);
+  if (frontendPortState.inUse) {
+    log(`[frontend] already running on http://localhost:${FRONTEND_PORT}`);
+  } else {
+    log("[frontend] starting: npm run dev (cwd=frontend)");
 
-  // Use shell on Windows so "npm" resolves in PATH.
-  const frontend = runProcess("frontend", "npm", ["run", "dev"], FRONTEND_CWD, frontendEnv, isWin());
-  children.push(frontend);
+    // Use shell on Windows so "npm" resolves in PATH.
+    const frontend = runProcess("frontend", "npm", ["run", "dev"], FRONTEND_CWD, frontendEnv, isWin());
+    children.push(frontend);
 
-  frontend.on("exit", (code) => {
-    if (shuttingDown) return;
-    shutdown(children, code ?? 1);
-  });
+    frontend.on("exit", (code) => {
+      if (shuttingDown) return;
+      shutdown(children, code ?? 1);
+    });
+  }
 
   process.on("SIGINT", () => shutdown(children, 0));
   process.on("SIGTERM", () => shutdown(children, 0));
