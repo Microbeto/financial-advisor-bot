@@ -1938,6 +1938,152 @@ async def predict_for_basket(stock_basket: List[str], lookback_days: int = 120, 
     return MLPredictionResponse(model_id=(f"mix[{mix_id}]" if mix_id else "mix[selected]"), items=items)
 
 
+async def predict_series_for_symbol(
+    symbol: str,
+    lookback_days: int = 365,
+    model_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Build a historical probability series for one symbol using the selected/requested model.
+
+    Returns:
+      {
+        "symbol": "AAPL",
+        "model_id": "...",
+        "series": [{"t": "YYYY-MM-DD", "prob_up": 0.53 | None}, ...]
+      }
+
+    Notes:
+      - Uses rolling technical features per date.
+      - Uses neutral (0) sentiment/macro slots at inference time for deterministic history replay.
+    """
+    sym = (symbol or "").upper().strip()
+    if not sym:
+        return {"symbol": "", "model_id": (model_id or "selected"), "series": []}
+
+    histories = await get_price_histories([sym], days=max(60, int(lookback_days)), concurrency=2)
+    points = ((histories.get(sym) or {}).get("points") or [])
+    if not points:
+        return {"symbol": sym, "model_id": (model_id or "selected"), "series": []}
+
+    closes: List[float] = []
+    dates: List[str] = []
+    for p in points:
+        c = p.get("c")
+        t = str(p.get("t") or "")
+        if c is None or not t:
+            continue
+        try:
+            closes.append(float(c))
+            dates.append(t)
+        except Exception:
+            continue
+
+    if len(closes) < 30:
+        return {
+            "symbol": sym,
+            "model_id": (model_id or "selected"),
+            "series": [{"t": d, "prob_up": None} for d in dates],
+        }
+
+    # Build rolling features aligned to each date.
+    # First 24 rows are warm-up and remain None.
+    feat_rows: List[List[float]] = []
+    valid_idx: List[int] = []
+    zero_tail = [0.0] * (len(BASE_FEATURE_NAMES) - 5)
+    for i in range(len(closes)):
+        tech = _technical_features(closes[: i + 1])
+        if i < 24:
+            continue
+        feat_rows.append(tech + zero_tail)
+        valid_idx.append(i)
+
+    if not feat_rows:
+        return {
+            "symbol": sym,
+            "model_id": (model_id or "selected"),
+            "series": [{"t": d, "prob_up": None} for d in dates],
+        }
+
+    arr = np.array(feat_rows, dtype=float)
+    active_pipeline = _active_nlp_pipeline()
+
+    used_model_id = ""
+    probs: Optional[np.ndarray] = None
+
+    if model_id:
+        doc = _selected_or_latest_model(model_id)
+        if not doc:
+            raise RuntimeError(f"Requested model_id not found: {model_id}")
+        model_pipeline = _resolve_model_nlp_pipeline(doc)
+        if _model_declares_nlp_pipeline(doc) and model_pipeline != active_pipeline:
+            raise RuntimeError(
+                "Requested model was trained with incompatible NLP pipeline "
+                f"('{model_pipeline}') while runtime pipeline is '{active_pipeline}'."
+            )
+        model = _load_model(doc)
+        algo = str(doc.get("algorithm") or "")
+        if algo == "stacking_meta" and isinstance(model, dict):
+            probs = _predict_stacking_model(model, arr)
+        elif algo == "multi_armed_tournament" and isinstance(model, dict):
+            probs = _predict_tournament_model(model, arr)
+        else:
+            probs = _predict_proba_or_hard(model, arr)
+        used_model_id = str(doc.get("model_id") or "")
+    else:
+        col = _registry_col()
+        selected_query = {"is_selected": True, **_pipeline_filter_query(active_pipeline)}
+        selected_docs = list(col.find(selected_query).sort([("score", -1), ("created_at", -1)]))
+        if not selected_docs:
+            fallback = _selected_or_latest_model(model_id=None)
+            if fallback and (not _model_declares_nlp_pipeline(fallback) or _resolve_model_nlp_pipeline(fallback) == active_pipeline):
+                selected_docs = [fallback]
+        selected_docs = selected_docs[: max(1, int(ML_SELECTED_TOP_K))]
+
+        model_probs: List[np.ndarray] = []
+        used_ids: List[str] = []
+        for d in selected_docs:
+            if _model_declares_nlp_pipeline(d) and _resolve_model_nlp_pipeline(d) != active_pipeline:
+                continue
+            try:
+                model = _load_model(d)
+                algo = str(d.get("algorithm") or "")
+                if algo == "stacking_meta" and isinstance(model, dict):
+                    probs_i = _predict_stacking_model(model, arr)
+                elif algo == "multi_armed_tournament" and isinstance(model, dict):
+                    probs_i = _predict_tournament_model(model, arr)
+                else:
+                    probs_i = _predict_proba_or_hard(model, arr)
+                model_probs.append(np.asarray(probs_i, dtype=float))
+                used_ids.append(str(d.get("model_id") or ""))
+            except Exception:
+                continue
+
+        if model_probs:
+            probs = np.mean(np.column_stack(model_probs), axis=1)
+            mix_id = ",".join([x for x in used_ids if x])
+            used_model_id = f"mix[{mix_id}]" if mix_id else "mix[selected]"
+
+    if probs is None:
+        raise RuntimeError(
+            "No selected model is available for NLP pipeline "
+            f"'{active_pipeline}'. Train/select a compatible model first."
+        )
+
+    probs = np.clip(np.asarray(probs, dtype=float), 0.0, 1.0)
+    full_probs: List[Optional[float]] = [None] * len(dates)
+    for j, idx in enumerate(valid_idx):
+        if j < len(probs) and 0 <= idx < len(full_probs):
+            full_probs[idx] = float(probs[j])
+
+    out_series = [
+        {"t": dates[i], "prob_up": (None if full_probs[i] is None else round(float(full_probs[i]), 6))}
+        for i in range(len(dates))
+    ]
+
+    return {"symbol": sym, "model_id": (used_model_id or model_id or "selected"), "series": out_series}
+
+
 # deploy_neural_network service logic.
 async def deploy_neural_network(model_id: Optional[str] = None) -> MLDeployResponse:
     col = _registry_col()
