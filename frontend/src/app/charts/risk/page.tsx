@@ -37,12 +37,13 @@ export default function RiskDashboardPage() {
   const [data,    setData]    = useState<RiskDashboardResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
+  const [saveImage, setSaveImage] = useState(false);
 
   async function load() {
     setLoading(true);
     setError(null);
     try {
-      const res = await getRiskDashboardChart();
+      const res = await getRiskDashboardChart(null, saveImage);
       setData(res);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -72,16 +73,27 @@ export default function RiskDashboardPage() {
           <div>
             <h1 className="text-2xl font-bold text-slate-50">Portfolio Risk Dashboard</h1>
             <p className="mt-1 text-sm text-slate-400">
-              VaR / CVaR, rolling volatility, drawdown and asset correlation. Uses your current portfolio. PNG saved to server.
+              VaR / CVaR, rolling volatility, drawdown and asset correlation using ML-weighted exposures.
             </p>
           </div>
-          <button
-            onClick={load}
-            disabled={loading}
-            className="rounded bg-rose-600 px-5 py-1.5 text-sm font-medium text-white hover:bg-rose-500 disabled:opacity-50"
-          >
-            {loading ? "Loading…" : "Refresh"}
-          </button>
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-2 rounded border border-slate-700 bg-slate-800/50 px-3 py-1.5 text-xs text-slate-300">
+              <input
+                type="checkbox"
+                checked={saveImage}
+                onChange={(e) => setSaveImage(e.target.checked)}
+                className="h-3.5 w-3.5"
+              />
+              Save PNG
+            </label>
+            <button
+              onClick={load}
+              disabled={loading}
+              className="rounded bg-rose-600 px-5 py-1.5 text-sm font-medium text-white hover:bg-rose-500 disabled:opacity-50"
+            >
+              {loading ? "Loading…" : "Refresh"}
+            </button>
+          </div>
         </div>
 
         {error && (
