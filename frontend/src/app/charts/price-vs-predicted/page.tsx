@@ -57,16 +57,15 @@ function renderSignalDot(props: {
 export default function PriceVsPredictedPage() {
   const [symbol,  setSymbol]  = useState("AAPL");
   const [period,  setPeriod]  = useState(PERIODS[2]);
-  const [saveImage, setSaveImage] = useState(false);
   const [data,    setData]    = useState<PriceVsPredictedResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
 
-  async function load() {
+  async function load(savePng = false) {
     setLoading(true);
     setError(null);
     try {
-      const res = await getPriceVsPredictedChart(symbol, period.days, null, saveImage);
+      const res = await getPriceVsPredictedChart(symbol, period.days, null, savePng);
       setData(res);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -138,21 +137,12 @@ export default function PriceVsPredictedPage() {
             </select>
           </label>
           <button
-            onClick={load}
+            onClick={() => load(false)}
             disabled={loading}
             className="mt-auto rounded bg-violet-600 px-5 py-1.5 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-50"
           >
             {loading ? "Loading…" : "Load"}
           </button>
-          <label className="mt-auto flex items-center gap-2 rounded border border-slate-700 bg-slate-800/50 px-3 py-1.5 text-xs text-slate-300">
-            <input
-              type="checkbox"
-              checked={saveImage}
-              onChange={(e) => setSaveImage(e.target.checked)}
-              className="h-3.5 w-3.5"
-            />
-            Save PNG
-          </label>
         </div>
 
         {error && (
@@ -262,11 +252,21 @@ export default function PriceVsPredictedPage() {
                 </div>
               </div>
             )}
+
+            <div className="flex justify-end">
+              <button
+                onClick={() => load(true)}
+                disabled={loading}
+                className="rounded border border-slate-600 bg-slate-800/70 px-4 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+              >
+                Save PNG
+              </button>
+            </div>
           </>
         )}
 
         {loading && (
-          <div className="py-16 text-center text-violet-400">Loading ML predictions, saving PNG…</div>
+          <div className="py-16 text-center text-violet-400">Loading ML predictions…</div>
         )}
       </div>
     </RequireAuth>

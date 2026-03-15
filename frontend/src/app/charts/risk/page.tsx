@@ -37,13 +37,12 @@ export default function RiskDashboardPage() {
   const [data,    setData]    = useState<RiskDashboardResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
-  const [saveImage, setSaveImage] = useState(false);
 
-  async function load() {
+  async function load(savePng = false) {
     setLoading(true);
     setError(null);
     try {
-      const res = await getRiskDashboardChart(null, saveImage);
+      const res = await getRiskDashboardChart(null, savePng);
       setData(res);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -76,24 +75,13 @@ export default function RiskDashboardPage() {
               VaR / CVaR, rolling volatility, drawdown and asset correlation using ML-weighted exposures.
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <label className="flex items-center gap-2 rounded border border-slate-700 bg-slate-800/50 px-3 py-1.5 text-xs text-slate-300">
-              <input
-                type="checkbox"
-                checked={saveImage}
-                onChange={(e) => setSaveImage(e.target.checked)}
-                className="h-3.5 w-3.5"
-              />
-              Save PNG
-            </label>
-            <button
-              onClick={load}
-              disabled={loading}
-              className="rounded bg-rose-600 px-5 py-1.5 text-sm font-medium text-white hover:bg-rose-500 disabled:opacity-50"
-            >
-              {loading ? "Loading…" : "Refresh"}
-            </button>
-          </div>
+          <button
+            onClick={() => load(false)}
+            disabled={loading}
+            className="rounded bg-rose-600 px-5 py-1.5 text-sm font-medium text-white hover:bg-rose-500 disabled:opacity-50"
+          >
+            {loading ? "Loading…" : "Refresh"}
+          </button>
         </div>
 
         {error && (
@@ -250,11 +238,21 @@ export default function RiskDashboardPage() {
               <p><span className="text-slate-200 font-medium">Conditional VaR (CVaR / Expected Shortfall):</span> On the worst days that exceed VaR, the average loss is <span className="text-orange-400">{data.cvar_pct_daily.toFixed(2)}%</span> of portfolio value.</p>
               <p className="text-slate-600">Historical simulation method using 2-year daily returns. For informational purposes only — not financial advice.</p>
             </div>
+
+            <div className="flex justify-end">
+              <button
+                onClick={() => load(true)}
+                disabled={loading}
+                className="rounded border border-slate-600 bg-slate-800/70 px-4 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+              >
+                Save PNG
+              </button>
+            </div>
           </>
         )}
 
         {loading && (
-          <div className="py-16 text-center text-rose-400">Computing risk metrics, saving PNG…</div>
+          <div className="py-16 text-center text-rose-400">Computing risk metrics…</div>
         )}
       </div>
     </RequireAuth>
