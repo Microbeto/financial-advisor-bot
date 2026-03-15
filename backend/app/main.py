@@ -76,6 +76,7 @@ from .services.ml_workflow import (
     get_model_feature_importances,
     list_models,
     predict_for_basket,
+    predict_series_for_symbol,
     prune_underperforming_models,
     get_ml_runtime_settings,
     get_tournament_competitor_stats,
@@ -1333,6 +1334,61 @@ def create_app() -> FastAPI:
     # Chart / Visualization endpoints
     # -------------------------------------------------------------------------
 
+    def _safe_float(v: Any, default: float = 0.0) -> float:
+        try:
+            return float(v)
+        except Exception:
+            return default
+
+    def _build_model_driven_points(
+        points: list[dict[str, Any]],
+        prediction_series: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Convert raw OHLC points into an ML-driven synthetic close path using prob_up.
+        This keeps chart outcomes tied to the chosen model while preserving timestamps.
+        """
+        if not points:
+            return []
+
+        prob_map: dict[str, float] = {}
+        for row in prediction_series or []:
+            t = str(row.get("t") or "")
+            p = row.get("prob_up")
+            if not t or p is None:
+                continue
+            try:
+                prob_map[t] = max(0.0, min(1.0, float(p)))
+            except Exception:
+                continue
+
+        out: list[dict[str, Any]] = []
+        first_c = _safe_float(points[0].get("c"), 1.0)
+        pred_close = max(0.01, first_c)
+        for i, pt in enumerate(points):
+            t = str(pt.get("t") or "")
+            raw_c = max(0.01, _safe_float(pt.get("c"), pred_close))
+            if i == 0:
+                pred_close = raw_c
+            else:
+                prob = prob_map.get(t)
+                if prob is None:
+                    # Hold with slight decay to prevent runaway drift when probabilities are sparse.
+                    pred_close = max(0.01, pred_close * 0.999)
+                else:
+                    # +/- 1% expected move scaled by confidence.
+                    factor = 1.0 + ((prob - 0.5) * 2.0 * 0.01)
+                    pred_close = max(0.01, pred_close * factor)
+
+            scale = (pred_close / raw_c) if raw_c > 0 else 1.0
+            row = dict(pt)
+            row["c"] = round(pred_close, 6)
+            for k in ("o", "h", "l"):
+                if k in row and row[k] is not None:
+                    row[k] = round(_safe_float(row[k], raw_c) * scale, 6)
+            out.append(row)
+        return out
+
     @app.get("/charts/backtest")
     async def charts_backtest(
         symbol: str = "SPY",
@@ -1341,11 +1397,13 @@ def create_app() -> FastAPI:
         initial_capital: float = 100_000.0,
         commission_rate: float = 0.001,
         slippage_bps: float = 2.0,
+        model_id: str | None = None,
+        save_image: bool = False,
         authorization: str | None = Header(default=None),
     ):
         """
-        Run a buy-and-hold backtest for *symbol* vs *benchmark* over *days* of
-        historical data.  Returns JSON metrics and saves a PNG to model_store/.
+        Model-driven backtest for *symbol* vs *benchmark* over *days*.
+        PNG is saved only when save_image=true.
         """
         await _acquire_limit("api_read")
         _claims_required(authorization)
@@ -1359,12 +1417,21 @@ def create_app() -> FastAPI:
         if not sym_pts:
             raise HTTPException(status_code=404, detail=f"No price data for {symbol}")
 
+        pred_ctx = await _maybe_await(
+            predict_series_for_symbol,
+            symbol.upper(),
+            lookback_days=days,
+            model_id=model_id,
+        )
+        pred_series = list(pred_ctx.get("series") or [])
+        ml_pts = _build_model_driven_points(sym_pts, pred_series)
+
         from .ml.chart_engine import run_backtest_chart
         from .services.ml_workflow import _model_store_dir
 
         result = await __import__("asyncio").to_thread(
             run_backtest_chart,
-            sym_pts,
+            ml_pts or sym_pts,
             symbol.upper(),
             bench_pts or sym_pts,
             benchmark.upper(),
@@ -1372,10 +1439,14 @@ def create_app() -> FastAPI:
             commission_rate=commission_rate,
             slippage_bps=slippage_bps,
             base_dir=_model_store_dir(),
+            save_image=bool(save_image),
         )
 
         if "error" in result:
             raise HTTPException(status_code=422, detail=result["error"])
+        result["ml_model_id"] = str(pred_ctx.get("model_id") or model_id or "selected")
+        result["ml_outcome_source"] = "model_driven_price_path"
+        result["image_saved"] = bool(save_image)
         return result
 
     @app.get("/charts/technical/{symbol}")
@@ -1386,6 +1457,8 @@ def create_app() -> FastAPI:
         macd_fast: int = 12,
         macd_slow: int = 26,
         macd_signal: int = 9,
+        model_id: str | None = None,
+        save_image: bool = False,
         authorization: str | None = Header(default=None),
     ):
         """RSI and MACD technical indicator chart for *symbol*."""
@@ -1397,21 +1470,34 @@ def create_app() -> FastAPI:
         if not pts:
             raise HTTPException(status_code=404, detail=f"No price data for {symbol}")
 
+        pred_ctx = await _maybe_await(
+            predict_series_for_symbol,
+            symbol.upper(),
+            lookback_days=days,
+            model_id=model_id,
+        )
+        pred_series = list(pred_ctx.get("series") or [])
+        ml_pts = _build_model_driven_points(pts, pred_series)
+
         from .ml.chart_engine import run_technical_chart
         from .services.ml_workflow import _model_store_dir
 
         result = await __import__("asyncio").to_thread(
             run_technical_chart,
-            pts,
+            ml_pts or pts,
             symbol.upper(),
             rsi_period=rsi_period,
             macd_fast=macd_fast,
             macd_slow=macd_slow,
             macd_signal=macd_signal,
             base_dir=_model_store_dir(),
+            save_image=bool(save_image),
         )
         if "error" in result:
             raise HTTPException(status_code=422, detail=result["error"])
+        result["ml_model_id"] = str(pred_ctx.get("model_id") or model_id or "selected")
+        result["ml_outcome_source"] = "model_driven_price_path"
+        result["image_saved"] = bool(save_image)
         return result
 
     @app.get("/charts/montecarlo/{symbol}")
@@ -1420,6 +1506,8 @@ def create_app() -> FastAPI:
         days: int = 730,
         n_simulations: int = 500,
         horizon_days: int = 252,
+        model_id: str | None = None,
+        save_image: bool = False,
         authorization: str | None = Header(default=None),
     ):
         """Monte Carlo simulation + percentile breakdown for *symbol*."""
@@ -1431,19 +1519,32 @@ def create_app() -> FastAPI:
         if not pts:
             raise HTTPException(status_code=404, detail=f"No price data for {symbol}")
 
+        pred_ctx = await _maybe_await(
+            predict_series_for_symbol,
+            symbol.upper(),
+            lookback_days=days,
+            model_id=model_id,
+        )
+        pred_series = list(pred_ctx.get("series") or [])
+        ml_pts = _build_model_driven_points(pts, pred_series)
+
         from .ml.chart_engine import run_montecarlo_chart
         from .services.ml_workflow import _model_store_dir
 
         result = await __import__("asyncio").to_thread(
             run_montecarlo_chart,
-            pts,
+            ml_pts or pts,
             symbol.upper(),
             n_simulations=min(n_simulations, 2000),
             horizon_days=min(horizon_days, 504),
             base_dir=_model_store_dir(),
+            save_image=bool(save_image),
         )
         if "error" in result:
             raise HTTPException(status_code=422, detail=result["error"])
+        result["ml_model_id"] = str(pred_ctx.get("model_id") or model_id or "selected")
+        result["ml_outcome_source"] = "model_driven_price_path"
+        result["image_saved"] = bool(save_image)
         return result
 
     @app.get("/charts/valuation/{symbol}")
@@ -1451,6 +1552,8 @@ def create_app() -> FastAPI:
         symbol: str,
         days: int = 365,
         bb_period: int = 20,
+        model_id: str | None = None,
+        save_image: bool = False,
         authorization: str | None = Header(default=None),
     ):
         """Valuation confidence intervals (Bollinger bands + %B) for *symbol*."""
@@ -1462,24 +1565,39 @@ def create_app() -> FastAPI:
         if not pts:
             raise HTTPException(status_code=404, detail=f"No price data for {symbol}")
 
+        pred_ctx = await _maybe_await(
+            predict_series_for_symbol,
+            symbol.upper(),
+            lookback_days=days,
+            model_id=model_id,
+        )
+        pred_series = list(pred_ctx.get("series") or [])
+        ml_pts = _build_model_driven_points(pts, pred_series)
+
         from .ml.chart_engine import run_valuation_confidence_chart
         from .services.ml_workflow import _model_store_dir
 
         result = await __import__("asyncio").to_thread(
             run_valuation_confidence_chart,
-            pts,
+            ml_pts or pts,
             symbol.upper(),
             bb_period=bb_period,
             base_dir=_model_store_dir(),
+            save_image=bool(save_image),
         )
         if "error" in result:
             raise HTTPException(status_code=422, detail=result["error"])
+        result["ml_model_id"] = str(pred_ctx.get("model_id") or model_id or "selected")
+        result["ml_outcome_source"] = "model_driven_price_path"
+        result["image_saved"] = bool(save_image)
         return result
 
     @app.get("/charts/price-vs-predicted/{symbol}")
     async def charts_price_vs_predicted(
         symbol: str,
         days: int = 365,
+        model_id: str | None = None,
+        save_image: bool = False,
         authorization: str | None = Header(default=None),
     ):
         """Historical price overlaid with ML up-probability predictions for *symbol*."""
@@ -1492,20 +1610,18 @@ def create_app() -> FastAPI:
         if not pts:
             raise HTTPException(status_code=404, detail=f"No price data for {symbol}")
 
-        # Attempt to fetch ML predictions for this symbol
-        predictions: list[dict[str, Any]] = []
-        try:
-            pred_resp = await _maybe_await(predict_for_basket, [symbol.upper()], lookback_days=days, model_id=None)
-            # predict_for_basket returns latest prediction; attach date series
-            for item in (pred_resp.items or []):
-                if item.symbol.upper() == symbol.upper():
-                    # We only get a single probability; attach it to each price date
-                    p = float(item.probability_up)
-                    for pt in pts[-60:]:  # last 60 dates
-                        predictions.append({"t": str(pt.get("t") or ""), "prob_up": p})
-                    break
-        except Exception:
-            pass
+        # Historical ML predictions for this symbol from selected/requested model
+        pred_ctx = await _maybe_await(
+            predict_series_for_symbol,
+            symbol.upper(),
+            lookback_days=days,
+            model_id=model_id,
+        )
+        predictions: list[dict[str, Any]] = [
+            {"t": str(r.get("t") or ""), "prob_up": float(r.get("prob_up"))}
+            for r in (pred_ctx.get("series") or [])
+            if r.get("prob_up") is not None
+        ]
 
         from .ml.chart_engine import run_price_vs_predicted_chart
         from .services.ml_workflow import _model_store_dir
@@ -1516,13 +1632,19 @@ def create_app() -> FastAPI:
             symbol.upper(),
             predictions,
             base_dir=_model_store_dir(),
+            save_image=bool(save_image),
         )
         if "error" in result:
             raise HTTPException(status_code=422, detail=result["error"])
+        result["ml_model_id"] = str(pred_ctx.get("model_id") or model_id or "selected")
+        result["ml_outcome_source"] = "historical_model_probabilities"
+        result["image_saved"] = bool(save_image)
         return result
 
     @app.get("/charts/risk-dashboard")
     async def charts_risk_dashboard(
+        model_id: str | None = None,
+        save_image: bool = False,
         authorization: str | None = Header(default=None),
     ):
         """Portfolio risk dashboard: VaR, CVaR, correlation matrix, drawdown."""
@@ -1553,11 +1675,28 @@ def create_app() -> FastAPI:
         price_histories_dict: dict[str, Any] = {
             sym: ((histories.get(sym) or {}).get("points") or []) for sym in syms
         }
+        # Reweight exposures by current ML probability so risk reflects chosen-model outcomes.
+        prob_map: dict[str, float] = {}
+        model_used = model_id or "selected"
+        try:
+            pred_resp = await _maybe_await(
+                predict_for_basket,
+                syms,
+                lookback_days=min(365, max(120, len(next(iter(price_histories_dict.values()), [])))),
+                model_id=model_id,
+            )
+            model_used = str(getattr(pred_resp, "model_id", "") or model_used)
+            for it in list(getattr(pred_resp, "items", []) or []):
+                prob_map[str(getattr(it, "symbol", "") or "").upper()] = max(0.0, min(1.0, float(getattr(it, "probability_up", 0.5))))
+        except Exception:
+            prob_map = {}
+
         portfolio_dict = {
             "holdings": [
                 {
                     "symbol":    str(h.symbol).upper(),
-                    "quantity":  float(getattr(h, "quantity", 1) or 1),
+                    "quantity":  float(getattr(h, "quantity", 1) or 1)
+                                 * max(0.05, prob_map.get(str(h.symbol).upper(), 0.5)),
                     "avg_price": float(getattr(h, "avg_price", 0) or 0),
                 }
                 for h in holdings
@@ -1572,9 +1711,13 @@ def create_app() -> FastAPI:
             portfolio_dict,
             price_histories_dict,
             base_dir=_model_store_dir(),
+            save_image=bool(save_image),
         )
         if "error" in result:
             raise HTTPException(status_code=422, detail=result["error"])
+        result["ml_model_id"] = model_used
+        result["ml_outcome_source"] = "ml_probability_weighted_exposure"
+        result["image_saved"] = bool(save_image)
         return result
 
     return app
