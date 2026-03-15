@@ -308,6 +308,167 @@ export interface MLTournamentStatsResponse {
   competitor_stats: Record<string, MLTournamentCompetitorStat>;
 }
 
+// ---------------------------------------------------------------------------
+// Chart / Visualization types
+// ---------------------------------------------------------------------------
+
+export interface BacktestEquityPoint {
+  t: string;
+  strategy: number;
+  strategy_after: number;
+  benchmark: number;
+}
+
+export interface BacktestDrawdownPoint {
+  t: string;
+  drawdown: number;
+}
+
+export interface BacktestResult {
+  symbol: string;
+  benchmark_symbol: string;
+  period_start: string;
+  period_end: string;
+  initial_capital: number;
+  portfolio_return_before: number;
+  portfolio_return_after: number;
+  benchmark_return: number;
+  alpha: number;
+  sharpe_ratio: number;
+  max_drawdown_pct: number;
+  annualized_volatility: number;
+  num_trades: number;
+  total_friction_cost: number;
+  avg_friction_per_trade: number;
+  commission_rate_pct: number;
+  slippage_bps: number;
+  friction_drag_pct: number;
+  equity_series: BacktestEquityPoint[];
+  drawdown_series: BacktestDrawdownPoint[];
+}
+
+export interface TechnicalPoint {
+  t: string;
+  close: number;
+  rsi: number | null;
+  macd: number | null;
+  signal: number | null;
+  histogram: number | null;
+}
+
+export interface TechnicalResult {
+  symbol: string;
+  rsi_period: number;
+  macd_fast: number;
+  macd_slow: number;
+  macd_signal_period: number;
+  current_rsi: number | null;
+  current_macd: number | null;
+  current_signal: number | null;
+  overbought_count: number;
+  oversold_count: number;
+  series: TechnicalPoint[];
+}
+
+export interface MonteCarloDistributionBucket {
+  bucket_low: number;
+  bucket_high: number;
+  count: number;
+}
+
+export interface MonteCarloResult {
+  symbol: string;
+  n_simulations: number;
+  horizon_days: number;
+  last_price: number;
+  mu_daily: number;
+  sigma_daily: number;
+  expected_price: number;
+  expected_return_pct: number;
+  prob_profit_pct: number;
+  p10_price: number;
+  p90_price: number;
+  percentile_paths: Record<string, number[]>; // keys: "5","25","50","75","95"
+  distribution: MonteCarloDistributionBucket[];
+}
+
+export interface ValuationPoint {
+  t: string;
+  close: number;
+  sma: number | null;
+  upper2: number | null;
+  lower2: number | null;
+  upper1: number | null;
+  lower1: number | null;
+  high52: number;
+  low52: number;
+  trend: number;
+  pct_b: number | null;
+}
+
+export interface ValuationResult {
+  symbol: string;
+  bb_period: number;
+  n_std: number;
+  last_price: number;
+  last_sma: number | null;
+  last_upper2: number | null;
+  last_lower2: number | null;
+  pct_b: number | null;
+  trend_slope: number;
+  series: ValuationPoint[];
+}
+
+export interface PriceVsPredictedPoint {
+  t: string;
+  close: number;
+  predicted: number | null;
+  prob_up: number | null;
+}
+
+export interface PriceVsPredictedSignal {
+  t: string;
+  price: number;
+  index: number;
+  signal: "buy" | "sell";
+  prob_up: number;
+}
+
+export interface PriceVsPredictedResult {
+  symbol: string;
+  n_points: number;
+  buy_signals: PriceVsPredictedSignal[];
+  sell_signals: PriceVsPredictedSignal[];
+  series: PriceVsPredictedPoint[];
+  signals: PriceVsPredictedSignal[];
+  avg_prob_up: number;
+}
+
+export interface RiskDashboardRollingVolPoint {
+  index: number;
+  vol: number | null;
+}
+
+export interface RiskDashboardDrawdownPoint {
+  index: number;
+  drawdown: number;
+}
+
+export interface RiskDashboardResult {
+  portfolio_value: number;
+  var_confidence: number;
+  var_pct_daily: number;
+  var_dollar: number;
+  cvar_pct_daily: number;
+  cvar_dollar: number;
+  max_drawdown_pct: number;
+  asset_volatilities: Record<string, number>;
+  symbols: string[];
+  correlation_matrix: number[][] | null;
+  rolling_vol_series: RiskDashboardRollingVolPoint[];
+  drawdown_series: RiskDashboardDrawdownPoint[];
+}
+
 export type AccountStatus = "active" | "suspended" | "locked";
 
 export interface AdminUserErrorItem {
