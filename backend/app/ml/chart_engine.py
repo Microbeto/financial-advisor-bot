@@ -82,6 +82,7 @@ def run_backtest_chart(
     commission_rate: float = 0.001,   # 0.1 %
     slippage_bps: float = 2.0,
     base_dir: Path,
+    save_image: bool = False,
 ) -> Dict[str, Any]:
     """
     Buy-and-hold backtest for *symbol* vs *benchmark_symbol*.
@@ -183,8 +184,9 @@ def run_backtest_chart(
             "drawdown_series":         drawdown_series,
         }
 
-        # ---------- Save PNG ----------
-        _save_backtest_png(summary, symbol, base_dir)
+        # ---------- Save PNG (opt-in) ----------
+        if save_image:
+            _save_backtest_png(summary, symbol, base_dir)
 
         return summary
 
@@ -362,6 +364,7 @@ def run_technical_chart(
     macd_slow: int = 26,
     macd_signal: int = 9,
     base_dir: Path,
+    save_image: bool = False,
 ) -> Dict[str, Any]:
     """
     Compute RSI and MACD for *prices*, save a 3-panel chart PNG, and return arrays.
@@ -415,7 +418,8 @@ def run_technical_chart(
             "series": series,
         }
 
-        _save_technical_png(result, closes, dates, rsi, macd_line, signal_line, histogram, symbol, base_dir)
+        if save_image:
+            _save_technical_png(result, closes, dates, rsi, macd_line, signal_line, histogram, symbol, base_dir)
         return result
 
     except Exception as exc:
@@ -509,6 +513,7 @@ def run_montecarlo_chart(
     horizon_days: int = 252,
     percentiles: Tuple[int, ...] = (5, 25, 50, 75, 95),
     base_dir: Path,
+    save_image: bool = False,
 ) -> Dict[str, Any]:
     """
     Run Geometric Brownian Motion Monte Carlo simulation for *symbol*.
@@ -575,7 +580,8 @@ def run_montecarlo_chart(
             "distribution":     distribution,
         }
 
-        _save_montecarlo_png(result, paths, percentiles, symbol, base_dir)
+        if save_image:
+            _save_montecarlo_png(result, paths, percentiles, symbol, base_dir)
         return result
 
     except Exception as exc:
@@ -687,6 +693,7 @@ def run_valuation_confidence_chart(
     bb_period: int = 20,
     n_std: float = 2.0,
     base_dir: Path,
+    save_image: bool = False,
 ) -> Dict[str, Any]:
     """
     Rolling mean ± 1σ and ± 2σ Bollinger confidence bands.
@@ -772,8 +779,9 @@ def run_valuation_confidence_chart(
             "series":       series,
         }
 
-        _save_valuation_confidence_png(result, closes, dates, sma, upper2, lower2,
-                                       upper1, lower1, high52, low52, trend, symbol, base_dir)
+        if save_image:
+            _save_valuation_confidence_png(result, closes, dates, sma, upper2, lower2,
+                                           upper1, lower1, high52, low52, trend, symbol, base_dir)
         return result
 
     except Exception as exc:
@@ -866,6 +874,7 @@ def run_price_vs_predicted_chart(
     predictions: List[Dict[str, Any]],
     *,
     base_dir: Path,
+    save_image: bool = False,
 ) -> Dict[str, Any]:
     """
     Overlay historical close with ML prediction probabilities.
@@ -958,7 +967,8 @@ def run_price_vs_predicted_chart(
             "series":        series,
         }
 
-        _save_price_vs_predicted_png(result, closes, dates, pred_price, probs, symbol, base_dir)
+        if save_image:
+            _save_price_vs_predicted_png(result, closes, dates, pred_price, probs, symbol, base_dir)
         return result
 
     except Exception as exc:
@@ -1044,6 +1054,7 @@ def run_risk_dashboard_chart(
     *,
     base_dir: Path,
     var_confidence: float = 0.95,
+    save_image: bool = False,
 ) -> Dict[str, Any]:
     """
     Portfolio risk dashboard:
@@ -1146,7 +1157,8 @@ def run_risk_dashboard_chart(
             ],
         }
 
-        _save_risk_dashboard_png(result, port_returns, dd, roll_vol, syms, ret_matrix, base_dir)
+        if save_image:
+            _save_risk_dashboard_png(result, port_returns, dd, roll_vol, syms, ret_matrix, base_dir)
         return result
 
     except Exception as exc:
