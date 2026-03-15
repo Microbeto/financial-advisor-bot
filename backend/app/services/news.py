@@ -718,7 +718,11 @@ def get_news_for_date(
     - optionally include symbol-matched items if symbols provided
     """
     date = str(date or "").strip() or _utc_day_key()
-    col = db.require_col(db.news_cache_col, "news_cache")
+    try:
+        col = db.require_col(db.news_cache_col, "news_cache")
+    except RuntimeError:
+        # Test runs may exercise ML workflows without initializing Mongo.
+        return []
 
     q: Dict = {"date": date}
 
@@ -757,7 +761,10 @@ def _cache_is_fresh(date: str, ttl_hours: int) -> bool:
     Uses latest published_at from cache.
     """
     date = str(date or "").strip() or _utc_day_key()
-    col = db.require_col(db.news_cache_col, "news_cache")
+    try:
+        col = db.require_col(db.news_cache_col, "news_cache")
+    except RuntimeError:
+        return False
 
     doc = col.find_one({"date": date}, sort=[("published_at", -1)])
     if not doc:
@@ -787,28 +794,32 @@ async def refresh_news_if_needed(date: str, symbols: List[str]) -> List[NewsItem
     date = str(date or "").strip() or _utc_day_key()
     syms = _seed_symbols(symbols)
 
-    # Fresh cache: just read
-    if _cache_is_fresh(date, NEWS_CACHE_TTL_HOURS):
-        cached = get_news_for_date(date, symbols=syms, limit=NEWS_DB_LIMIT, include_market=True)
-        _NEWS_REFRESH_STATS["hit"] += 1
-        _log_refresh_stats(path="cache_hit", date=date, symbols_count=int(len(syms)), item_count=int(len(cached)))
-        return cached
+    try:
+        # Fresh cache: just read
+        if _cache_is_fresh(date, NEWS_CACHE_TTL_HOURS):
+            cached = get_news_for_date(date, symbols=syms, limit=NEWS_DB_LIMIT, include_market=True)
+            _NEWS_REFRESH_STATS["hit"] += 1
+            _log_refresh_stats(path="cache_hit", date=date, symbols_count=int(len(syms)), item_count=int(len(cached)))
+            return cached
 
-    # Not fresh: fetch
-    _log("INFO", f"refresh needed date={date} mode={NEWS_PREFETCH_MODE}")
+        # Not fresh: fetch
+        _log("INFO", f"refresh needed date={date} mode={NEWS_PREFETCH_MODE}")
 
-    if NEWS_PREFETCH_MODE == "symbol_first":
-        await refresh_news_for_symbols(date, syms)
-        await refresh_market_news(date)
-    else:
-        # market_first (recommended): guarantees news daily even if symbol matching fails
-        await refresh_market_news(date)
-        await refresh_news_for_symbols(date, syms)
+        if NEWS_PREFETCH_MODE == "symbol_first":
+            await refresh_news_for_symbols(date, syms)
+            await refresh_market_news(date)
+        else:
+            # market_first (recommended): guarantees news daily even if symbol matching fails
+            await refresh_market_news(date)
+            await refresh_news_for_symbols(date, syms)
 
-    refreshed = get_news_for_date(date, symbols=syms, limit=NEWS_DB_LIMIT, include_market=True)
-    _NEWS_REFRESH_STATS["miss"] += 1
-    _log_refresh_stats(path="cache_miss_fetch", date=date, symbols_count=int(len(syms)), item_count=int(len(refreshed)))
-    return refreshed
+        refreshed = get_news_for_date(date, symbols=syms, limit=NEWS_DB_LIMIT, include_market=True)
+        _NEWS_REFRESH_STATS["miss"] += 1
+        _log_refresh_stats(path="cache_miss_fetch", date=date, symbols_count=int(len(syms)), item_count=int(len(refreshed)))
+        return refreshed
+    except RuntimeError:
+        _log_refresh_stats(path="db_unavailable", date=date, symbols_count=int(len(syms)), item_count=0)
+        return []
 
 
 # refresh_top_news_of_day service logic.
