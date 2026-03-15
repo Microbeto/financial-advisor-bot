@@ -66,7 +66,12 @@ def init_db() -> None:
     global ml_models_col, ml_model_runs_col, ml_runtime_settings_col
 
     if _client is None or _db is None:
-        _client = MongoClient(_MONGO_URL)
+        _client = MongoClient(
+            _MONGO_URL,
+            serverSelectionTimeoutMS=int(os.getenv("MONGO_SERVER_SEL_TIMEOUT_MS", "5000")),
+            connectTimeoutMS=int(os.getenv("MONGO_CONNECT_TIMEOUT_MS", "5000")),
+            socketTimeoutMS=int(os.getenv("MONGO_SOCKET_TIMEOUT_MS", "10000")),
+        )
         _db = _client[_DB_NAME]
         _client.admin.command("ping")
 

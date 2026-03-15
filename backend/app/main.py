@@ -206,15 +206,27 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+    # Set safe defaults immediately – FinBERT / Ollama probes run in background
+    # so the /health endpoint is reachable seconds after startup.
+    app.state.model_router = intelligence_router
+    app.state.model_router_diagnostics = {"tier": "low", "status": "pending"}
+    app.state.system_capability = "low"
+
     try:
-        diagnostics = await intelligence_router.run_diagnostics()
-        app.state.model_router = intelligence_router
-        app.state.model_router_diagnostics = diagnostics
-        app.state.system_capability = diagnostics.get("tier", "low")
+        import asyncio as _asyncio_diag
+
+        async def _bg_diagnostics() -> None:
+            try:
+                diagnostics = await intelligence_router.run_diagnostics()
+                app.state.model_router_diagnostics = diagnostics
+                app.state.system_capability = diagnostics.get("tier", "low")
+            except Exception:
+                app.state.model_router_diagnostics = {"tier": "low", "error": "router_diagnostics_failed"}
+                app.state.system_capability = "low"
+
+        _asyncio_diag.create_task(_bg_diagnostics())
     except Exception:
-        app.state.model_router = intelligence_router
-        app.state.model_router_diagnostics = {"tier": "low", "error": "router_diagnostics_failed"}
-        app.state.system_capability = "low"
+        pass
 
     yield
 
