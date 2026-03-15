@@ -48,6 +48,7 @@ export default function MonteCarloPage() {
   const [symbol, setSymbol]     = useState("AAPL");
   const [horizon, setHorizon]   = useState(HORIZONS[2]);
   const [nSim, setNSim]         = useState(500);
+  const [saveImage, setSaveImage] = useState(false);
   const [data, setData]         = useState<MonteCarloResult | null>(null);
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState<string | null>(null);
@@ -56,7 +57,7 @@ export default function MonteCarloPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await getMonteCarloChart(symbol, 730, nSim, horizon.days);
+      const res = await getMonteCarloChart(symbol, 730, nSim, horizon.days, null, saveImage);
       setData(res);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -100,7 +101,7 @@ export default function MonteCarloPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-50">Monte Carlo Simulation</h1>
           <p className="mt-1 text-sm text-slate-400">
-            Geometric Brownian Motion with percentile fan, final-price distribution. PNG saved to server.
+            ML model-driven price path simulation with percentile fan and final-price distribution.
           </p>
         </div>
 
@@ -143,6 +144,15 @@ export default function MonteCarloPage() {
           >
             {loading ? "Running…" : "Run Simulation"}
           </button>
+          <label className="mt-auto flex items-center gap-2 rounded border border-slate-700 bg-slate-800/50 px-3 py-1.5 text-xs text-slate-300">
+            <input
+              type="checkbox"
+              checked={saveImage}
+              onChange={(e) => setSaveImage(e.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            Save PNG
+          </label>
         </div>
 
         {error && (
