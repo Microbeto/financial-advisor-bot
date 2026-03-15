@@ -187,9 +187,17 @@ async def lifespan(app: FastAPI):
         pass
 
     try:
-        from .ml.visualizations import run_startup_visualizations
-        from .services.ml_workflow import _model_store_dir
-        run_startup_visualizations(_model_store_dir())
+        import asyncio as _asyncio
+
+        async def _bg_startup_viz() -> None:
+            try:
+                from .ml.visualizations import run_startup_visualizations
+                from .services.ml_workflow import _model_store_dir
+                await _asyncio.to_thread(run_startup_visualizations, _model_store_dir())
+            except Exception:
+                pass
+
+        _asyncio.create_task(_bg_startup_viz())
     except Exception:
         pass
 

@@ -54,7 +54,10 @@ def _mpl():
     """Lazily import matplotlib and return (matplotlib, pyplot, patches) or (None, None, None)."""
     try:
         import matplotlib
-        matplotlib.use("Agg")          # headless – must come before pyplot import
+        try:
+            matplotlib.use("Agg")      # headless – no-op if backend already set
+        except Exception:
+            pass
         import matplotlib.pyplot as plt
         import matplotlib.patches as mpatches
         return matplotlib, plt, mpatches
