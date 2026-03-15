@@ -10,7 +10,12 @@ from typing import Any, Dict, Optional
 import jwt
 
 # Reads the application secret used for token signing.
-_SECRET = os.getenv("APP_SECRET", "dev-secret-change-me")
+_SECRET_FROM_ENV = os.getenv("APP_SECRET")
+if _SECRET_FROM_ENV is None:
+    # Generate a strong process-local dev secret when APP_SECRET is unset.
+    _SECRET = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
+else:
+    _SECRET = _SECRET_FROM_ENV
 # Creates a module logger for security-related warnings.
 _logger = logging.getLogger(__name__)
 
@@ -26,11 +31,12 @@ def _signing_key(secret: str) -> bytes:
     if len(raw) >= 32:
         return raw
 
-    # Warns and derives a stable 32-byte fallback key for undersized secrets.
-    _logger.warning(
-        "APP_SECRET is shorter than 32 bytes; deriving 32-byte signing key via SHA-256. "
-        "Set APP_SECRET to a strong 32+ byte secret in production."
-    )
+    # Warn only when the user explicitly configured a weak APP_SECRET.
+    if _SECRET_FROM_ENV is not None:
+        _logger.warning(
+            "APP_SECRET is shorter than 32 bytes; deriving 32-byte signing key via SHA-256. "
+            "Set APP_SECRET to a strong 32+ byte secret in production."
+        )
     return hashlib.sha256(raw).digest()
 
 
