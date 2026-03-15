@@ -10,6 +10,7 @@ from .meta_interface import MetaCombiner, scalar_allocation
 
 DEFAULT_TRANSACTION_COST_BPS = 10.0
 DEFAULT_ANNUAL_RISK_FREE_RATE = 0.04
+DEFAULT_MAX_WINNER_DRAWDOWN_ABS = 0.30
 
 
 @dataclass
@@ -153,8 +154,14 @@ def run_walk_forward_tournament(
             "sample_count": float(arr.size),
         }
 
+    eligible = [
+        kv
+        for kv in stats.items()
+        if abs(float(kv[1].get("max_drawdown", 0.0))) <= float(DEFAULT_MAX_WINNER_DRAWDOWN_ABS)
+    ]
+    ranked_pool = eligible if eligible else list(stats.items())
     ranked = sorted(
-        stats.items(),
+        ranked_pool,
         key=lambda kv: (float(kv[1].get("sharpe", 0.0)), -abs(float(kv[1].get("max_drawdown", 0.0)))),
         reverse=True,
     )
