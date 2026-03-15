@@ -38,6 +38,7 @@ function TopNav() {
     { href: "/risk-profile", label: "Risk Profile" },
     { href: "/portfolio", label: "Portfolio" },
     { href: "/goals", label: "Goals" },
+    { href: "/charts", label: "Charts" },
     { href: "/audit-log", label: "Audit Log" },
   ];
 
