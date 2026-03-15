@@ -20,6 +20,12 @@ import type {
   AdminUserDetail,
   AccountStatus,
   RouterDiagnosticsResponse,
+  BacktestResult,
+  TechnicalResult,
+  MonteCarloResult,
+  ValuationResult,
+  PriceVsPredictedResult,
+  RiskDashboardResult,
 } from "./types";
 import { API_BASE_URL } from "./config";
 
@@ -640,5 +646,81 @@ export async function adminPurgeUser(userId: string) {
   return request<{ ok: boolean; deleted: Record<string, number> }>(`/admin/users/${enc}/purge`, {
     method: "DELETE",
     retry: { attempts: 1 },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Chart / Visualization API functions
+// ---------------------------------------------------------------------------
+
+export async function getBacktestChart(
+  symbol: string,
+  benchmark = "SPY",
+  days = 1825,
+  initialCapital = 100000,
+  commissionRate = 0.001,
+  slippageBps = 2.0
+) {
+  const p = new URLSearchParams({
+    symbol,
+    benchmark,
+    days: String(days),
+    initial_capital: String(initialCapital),
+    commission_rate: String(commissionRate),
+    slippage_bps: String(slippageBps),
+  });
+  return request<BacktestResult>(`/charts/backtest?${p.toString()}`, {
+    timeoutMs: 60000,
+    retry: { attempts: 2, baseDelayMs: 400, maxDelayMs: 3000 },
+  });
+}
+
+export async function getTechnicalChart(symbol: string, days = 365) {
+  const symEnc = encodeURIComponent(symbol);
+  return request<TechnicalResult>(`/charts/technical/${symEnc}?days=${days}`, {
+    timeoutMs: 60000,
+    retry: { attempts: 2, baseDelayMs: 400, maxDelayMs: 3000 },
+  });
+}
+
+export async function getMonteCarloChart(
+  symbol: string,
+  days = 730,
+  nSimulations = 500,
+  horizonDays = 252
+) {
+  const symEnc = encodeURIComponent(symbol);
+  const p = new URLSearchParams({
+    days: String(days),
+    n_simulations: String(nSimulations),
+    horizon_days: String(horizonDays),
+  });
+  return request<MonteCarloResult>(`/charts/montecarlo/${symEnc}?${p.toString()}`, {
+    timeoutMs: 90000,
+    retry: { attempts: 2, baseDelayMs: 500, maxDelayMs: 4000 },
+  });
+}
+
+export async function getValuationChart(symbol: string, days = 365, bbPeriod = 20) {
+  const symEnc = encodeURIComponent(symbol);
+  const p = new URLSearchParams({ days: String(days), bb_period: String(bbPeriod) });
+  return request<ValuationResult>(`/charts/valuation/${symEnc}?${p.toString()}`, {
+    timeoutMs: 60000,
+    retry: { attempts: 2, baseDelayMs: 400, maxDelayMs: 3000 },
+  });
+}
+
+export async function getPriceVsPredictedChart(symbol: string, days = 365) {
+  const symEnc = encodeURIComponent(symbol);
+  return request<PriceVsPredictedResult>(`/charts/price-vs-predicted/${symEnc}?days=${days}`, {
+    timeoutMs: 90000,
+    retry: { attempts: 2, baseDelayMs: 500, maxDelayMs: 4000 },
+  });
+}
+
+export async function getRiskDashboardChart() {
+  return request<RiskDashboardResult>("/charts/risk-dashboard", {
+    timeoutMs: 90000,
+    retry: { attempts: 2, baseDelayMs: 500, maxDelayMs: 4000 },
   });
 }
