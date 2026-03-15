@@ -430,7 +430,7 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
             sp500_down=[TrendItem(**x) for x in (sig.get("sp500_down") or [])],
             dow_up=[TrendItem(**x) for x in (sig.get("dow_up") or [])],
             dow_down=[TrendItem(**x) for x in (sig.get("dow_down") or [])],
-            top_news=[NewsItem(**x) for x in (top_news or [])],
+            top_news=[x if isinstance(x, NewsItem) else NewsItem(**x) for x in (top_news or [])],
             system_capability=capability,  # type: ignore[arg-type]
             llm_summary_enabled=llm_summary_enabled,
             market_summary=market_summary,
