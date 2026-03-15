@@ -659,7 +659,9 @@ export async function getBacktestChart(
   days = 1825,
   initialCapital = 100000,
   commissionRate = 0.001,
-  slippageBps = 2.0
+  slippageBps = 2.0,
+  modelId: string | null = null,
+  saveImage = false
 ) {
   const p = new URLSearchParams({
     symbol,
@@ -668,16 +670,25 @@ export async function getBacktestChart(
     initial_capital: String(initialCapital),
     commission_rate: String(commissionRate),
     slippage_bps: String(slippageBps),
+    save_image: String(saveImage),
   });
+  if (modelId) p.set("model_id", modelId);
   return request<BacktestResult>(`/charts/backtest?${p.toString()}`, {
     timeoutMs: 60000,
     retry: { attempts: 2, baseDelayMs: 400, maxDelayMs: 3000 },
   });
 }
 
-export async function getTechnicalChart(symbol: string, days = 365) {
+export async function getTechnicalChart(
+  symbol: string,
+  days = 365,
+  modelId: string | null = null,
+  saveImage = false
+) {
   const symEnc = encodeURIComponent(symbol);
-  return request<TechnicalResult>(`/charts/technical/${symEnc}?days=${days}`, {
+  const p = new URLSearchParams({ days: String(days), save_image: String(saveImage) });
+  if (modelId) p.set("model_id", modelId);
+  return request<TechnicalResult>(`/charts/technical/${symEnc}?${p.toString()}`, {
     timeoutMs: 60000,
     retry: { attempts: 2, baseDelayMs: 400, maxDelayMs: 3000 },
   });
@@ -687,39 +698,63 @@ export async function getMonteCarloChart(
   symbol: string,
   days = 730,
   nSimulations = 500,
-  horizonDays = 252
+  horizonDays = 252,
+  modelId: string | null = null,
+  saveImage = false
 ) {
   const symEnc = encodeURIComponent(symbol);
   const p = new URLSearchParams({
     days: String(days),
     n_simulations: String(nSimulations),
     horizon_days: String(horizonDays),
+    save_image: String(saveImage),
   });
+  if (modelId) p.set("model_id", modelId);
   return request<MonteCarloResult>(`/charts/montecarlo/${symEnc}?${p.toString()}`, {
     timeoutMs: 90000,
     retry: { attempts: 2, baseDelayMs: 500, maxDelayMs: 4000 },
   });
 }
 
-export async function getValuationChart(symbol: string, days = 365, bbPeriod = 20) {
+export async function getValuationChart(
+  symbol: string,
+  days = 365,
+  bbPeriod = 20,
+  modelId: string | null = null,
+  saveImage = false
+) {
   const symEnc = encodeURIComponent(symbol);
-  const p = new URLSearchParams({ days: String(days), bb_period: String(bbPeriod) });
+  const p = new URLSearchParams({
+    days: String(days),
+    bb_period: String(bbPeriod),
+    save_image: String(saveImage),
+  });
+  if (modelId) p.set("model_id", modelId);
   return request<ValuationResult>(`/charts/valuation/${symEnc}?${p.toString()}`, {
     timeoutMs: 60000,
     retry: { attempts: 2, baseDelayMs: 400, maxDelayMs: 3000 },
   });
 }
 
-export async function getPriceVsPredictedChart(symbol: string, days = 365) {
+export async function getPriceVsPredictedChart(
+  symbol: string,
+  days = 365,
+  modelId: string | null = null,
+  saveImage = false
+) {
   const symEnc = encodeURIComponent(symbol);
-  return request<PriceVsPredictedResult>(`/charts/price-vs-predicted/${symEnc}?days=${days}`, {
+  const p = new URLSearchParams({ days: String(days), save_image: String(saveImage) });
+  if (modelId) p.set("model_id", modelId);
+  return request<PriceVsPredictedResult>(`/charts/price-vs-predicted/${symEnc}?${p.toString()}`, {
     timeoutMs: 90000,
     retry: { attempts: 2, baseDelayMs: 500, maxDelayMs: 4000 },
   });
 }
 
-export async function getRiskDashboardChart() {
-  return request<RiskDashboardResult>("/charts/risk-dashboard", {
+export async function getRiskDashboardChart(modelId: string | null = null, saveImage = false) {
+  const p = new URLSearchParams({ save_image: String(saveImage) });
+  if (modelId) p.set("model_id", modelId);
+  return request<RiskDashboardResult>(`/charts/risk-dashboard?${p.toString()}`, {
     timeoutMs: 90000,
     retry: { attempts: 2, baseDelayMs: 500, maxDelayMs: 4000 },
   });
