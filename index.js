@@ -177,6 +177,23 @@ async function isBackendHealthy() {
   }
 }
 
+async function getBackendHealth() {
+  const url = `http://${BACKEND_HOST}:${BACKEND_PORT}${HEALTH_PATH}`;
+  try {
+    const r = await httpGet(url);
+    if (!(r.status >= 200 && r.status < 300)) {
+      return { ok: false, db: false };
+    }
+    const payload = JSON.parse(String(r.body || "{}"));
+    return {
+      ok: Boolean(payload?.ok),
+      db: Boolean(payload?.db),
+    };
+  } catch {
+    return { ok: false, db: false };
+  }
+}
+
 async function waitForBackendHealthy(timeoutMs) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -289,9 +306,14 @@ async function main() {
   }
 
   if (START_ML_ON_BOOT) {
-    const py = pickPythonExe();
-    const trainer = triggerMlTraining(py, BACKEND_CWD, backendEnv);
-    if (trainer) children.push(trainer);
+    const health = await getBackendHealth();
+    if (!health.db) {
+      warn("[ml] startup training skipped: backend running in degraded mode (db=false)");
+    } else {
+      const py = pickPythonExe();
+      const trainer = triggerMlTraining(py, BACKEND_CWD, backendEnv);
+      if (trainer) children.push(trainer);
+    }
   } else {
     log("[ml] startup training disabled (START_ML_ON_BOOT=0)");
   }

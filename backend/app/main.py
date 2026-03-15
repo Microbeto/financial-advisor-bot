@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import db
@@ -157,7 +158,11 @@ def _claims_required(authorization: str | None) -> dict[str, str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    db.init_db()
+    try:
+        db.init_db()
+    except Exception:
+        # Degraded startup mode: API stays alive, /health will report db=false.
+        pass
     try:
         app.state.db = db.get_db()
     except Exception:
@@ -239,6 +244,20 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="Financial Advisor Bot API", lifespan=lifespan)
     glossary_ai = GenerativeIntelligence()
+
+    @app.exception_handler(RuntimeError)
+    async def runtime_error_handler(request: Request, exc: RuntimeError):
+        msg = str(exc or "")
+        if "Database not initialised" in msg:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": "Database unavailable. Start MongoDB and retry.",
+                    "code": "database_unavailable",
+                    "path": str(request.url.path),
+                },
+            )
+        return JSONResponse(status_code=500, content={"detail": msg or "Internal server error"})
 
     def _normalize_term(s: str) -> str:
         return str(s or "").strip().lower()
