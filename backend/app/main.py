@@ -1329,6 +1329,254 @@ def create_app() -> FastAPI:
         out = pe.update_global_constraints(add=req.add, remove=req.remove)
         return PolicyConstraintResponse(constraints=out)
 
+    # -------------------------------------------------------------------------
+    # Chart / Visualization endpoints
+    # -------------------------------------------------------------------------
+
+    @app.get("/charts/backtest")
+    async def charts_backtest(
+        symbol: str = "SPY",
+        benchmark: str = "SPY",
+        days: int = 1825,
+        initial_capital: float = 100_000.0,
+        commission_rate: float = 0.001,
+        slippage_bps: float = 2.0,
+        authorization: str | None = Header(default=None),
+    ):
+        """
+        Run a buy-and-hold backtest for *symbol* vs *benchmark* over *days* of
+        historical data.  Returns JSON metrics and saves a PNG to model_store/.
+        """
+        await _acquire_limit("api_read")
+        _claims_required(authorization)
+
+        syms_to_fetch = list({symbol.upper(), benchmark.upper()})
+        histories = await get_price_histories(syms_to_fetch, days=days, concurrency=4)
+
+        sym_pts   = (histories.get(symbol.upper()) or {}).get("points") or []
+        bench_pts = (histories.get(benchmark.upper()) or {}).get("points") or []
+
+        if not sym_pts:
+            raise HTTPException(status_code=404, detail=f"No price data for {symbol}")
+
+        from .ml.chart_engine import run_backtest_chart
+        from .services.ml_workflow import _model_store_dir
+
+        result = await __import__("asyncio").to_thread(
+            run_backtest_chart,
+            sym_pts,
+            symbol.upper(),
+            bench_pts or sym_pts,
+            benchmark.upper(),
+            initial_capital=initial_capital,
+            commission_rate=commission_rate,
+            slippage_bps=slippage_bps,
+            base_dir=_model_store_dir(),
+        )
+
+        if "error" in result:
+            raise HTTPException(status_code=422, detail=result["error"])
+        return result
+
+    @app.get("/charts/technical/{symbol}")
+    async def charts_technical(
+        symbol: str,
+        days: int = 365,
+        rsi_period: int = 14,
+        macd_fast: int = 12,
+        macd_slow: int = 26,
+        macd_signal: int = 9,
+        authorization: str | None = Header(default=None),
+    ):
+        """RSI and MACD technical indicator chart for *symbol*."""
+        await _acquire_limit("api_read")
+        _claims_required(authorization)
+
+        histories = await get_price_histories([symbol.upper()], days=days, concurrency=2)
+        pts = (histories.get(symbol.upper()) or {}).get("points") or []
+        if not pts:
+            raise HTTPException(status_code=404, detail=f"No price data for {symbol}")
+
+        from .ml.chart_engine import run_technical_chart
+        from .services.ml_workflow import _model_store_dir
+
+        result = await __import__("asyncio").to_thread(
+            run_technical_chart,
+            pts,
+            symbol.upper(),
+            rsi_period=rsi_period,
+            macd_fast=macd_fast,
+            macd_slow=macd_slow,
+            macd_signal=macd_signal,
+            base_dir=_model_store_dir(),
+        )
+        if "error" in result:
+            raise HTTPException(status_code=422, detail=result["error"])
+        return result
+
+    @app.get("/charts/montecarlo/{symbol}")
+    async def charts_montecarlo(
+        symbol: str,
+        days: int = 730,
+        n_simulations: int = 500,
+        horizon_days: int = 252,
+        authorization: str | None = Header(default=None),
+    ):
+        """Monte Carlo simulation + percentile breakdown for *symbol*."""
+        await _acquire_limit("api_read")
+        _claims_required(authorization)
+
+        histories = await get_price_histories([symbol.upper()], days=days, concurrency=2)
+        pts = (histories.get(symbol.upper()) or {}).get("points") or []
+        if not pts:
+            raise HTTPException(status_code=404, detail=f"No price data for {symbol}")
+
+        from .ml.chart_engine import run_montecarlo_chart
+        from .services.ml_workflow import _model_store_dir
+
+        result = await __import__("asyncio").to_thread(
+            run_montecarlo_chart,
+            pts,
+            symbol.upper(),
+            n_simulations=min(n_simulations, 2000),
+            horizon_days=min(horizon_days, 504),
+            base_dir=_model_store_dir(),
+        )
+        if "error" in result:
+            raise HTTPException(status_code=422, detail=result["error"])
+        return result
+
+    @app.get("/charts/valuation/{symbol}")
+    async def charts_valuation(
+        symbol: str,
+        days: int = 365,
+        bb_period: int = 20,
+        authorization: str | None = Header(default=None),
+    ):
+        """Valuation confidence intervals (Bollinger bands + %B) for *symbol*."""
+        await _acquire_limit("api_read")
+        _claims_required(authorization)
+
+        histories = await get_price_histories([symbol.upper()], days=days, concurrency=2)
+        pts = (histories.get(symbol.upper()) or {}).get("points") or []
+        if not pts:
+            raise HTTPException(status_code=404, detail=f"No price data for {symbol}")
+
+        from .ml.chart_engine import run_valuation_confidence_chart
+        from .services.ml_workflow import _model_store_dir
+
+        result = await __import__("asyncio").to_thread(
+            run_valuation_confidence_chart,
+            pts,
+            symbol.upper(),
+            bb_period=bb_period,
+            base_dir=_model_store_dir(),
+        )
+        if "error" in result:
+            raise HTTPException(status_code=422, detail=result["error"])
+        return result
+
+    @app.get("/charts/price-vs-predicted/{symbol}")
+    async def charts_price_vs_predicted(
+        symbol: str,
+        days: int = 365,
+        authorization: str | None = Header(default=None),
+    ):
+        """Historical price overlaid with ML up-probability predictions for *symbol*."""
+        await _acquire_limit("api_read")
+        claims = _claims_required(authorization)
+        uid = str(claims.get("uid", "") or "")
+
+        histories = await get_price_histories([symbol.upper()], days=days, concurrency=2)
+        pts = (histories.get(symbol.upper()) or {}).get("points") or []
+        if not pts:
+            raise HTTPException(status_code=404, detail=f"No price data for {symbol}")
+
+        # Attempt to fetch ML predictions for this symbol
+        predictions: list[dict[str, Any]] = []
+        try:
+            pred_resp = await _maybe_await(predict_for_basket, [symbol.upper()], lookback_days=days, model_id=None)
+            # predict_for_basket returns latest prediction; attach date series
+            for item in (pred_resp.items or []):
+                if item.symbol.upper() == symbol.upper():
+                    # We only get a single probability; attach it to each price date
+                    p = float(item.probability_up)
+                    for pt in pts[-60:]:  # last 60 dates
+                        predictions.append({"t": str(pt.get("t") or ""), "prob_up": p})
+                    break
+        except Exception:
+            pass
+
+        from .ml.chart_engine import run_price_vs_predicted_chart
+        from .services.ml_workflow import _model_store_dir
+
+        result = await __import__("asyncio").to_thread(
+            run_price_vs_predicted_chart,
+            pts,
+            symbol.upper(),
+            predictions,
+            base_dir=_model_store_dir(),
+        )
+        if "error" in result:
+            raise HTTPException(status_code=422, detail=result["error"])
+        return result
+
+    @app.get("/charts/risk-dashboard")
+    async def charts_risk_dashboard(
+        authorization: str | None = Header(default=None),
+    ):
+        """Portfolio risk dashboard: VaR, CVaR, correlation matrix, drawdown."""
+        await _acquire_limit("api_read")
+        claims = _claims_required(authorization)
+        uid = str(claims.get("uid", "") or "")
+
+        # Load user portfolio
+        try:
+            from .services.portfolio import get_portfolio_for_user  # type: ignore
+            snapshot = get_portfolio_for_user(uid)
+        except Exception:
+            snapshot = None
+
+        if snapshot is None:
+            # Fall back to admin default portfolio
+            try:
+                snapshot = await _admin_default_portfolio()
+            except Exception:
+                raise HTTPException(status_code=422, detail="No portfolio data available")
+
+        holdings = list(getattr(snapshot, "holdings", []) or [])
+        if not holdings:
+            raise HTTPException(status_code=422, detail="Portfolio is empty")
+
+        syms = list({str(h.symbol).upper() for h in holdings if getattr(h, "symbol", None)})
+        histories = await get_price_histories(syms, days=365, concurrency=8)
+        price_histories_dict: dict[str, Any] = {
+            sym: ((histories.get(sym) or {}).get("points") or []) for sym in syms
+        }
+        portfolio_dict = {
+            "holdings": [
+                {
+                    "symbol":    str(h.symbol).upper(),
+                    "quantity":  float(getattr(h, "quantity", 1) or 1),
+                    "avg_price": float(getattr(h, "avg_price", 0) or 0),
+                }
+                for h in holdings
+            ]
+        }
+
+        from .ml.chart_engine import run_risk_dashboard_chart
+        from .services.ml_workflow import _model_store_dir
+
+        result = await __import__("asyncio").to_thread(
+            run_risk_dashboard_chart,
+            portfolio_dict,
+            price_histories_dict,
+            base_dir=_model_store_dir(),
+        )
+        if "error" in result:
+            raise HTTPException(status_code=422, detail=result["error"])
+        return result
+
     return app
 
 
