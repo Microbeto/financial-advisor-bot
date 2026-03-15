@@ -57,6 +57,7 @@ function renderSignalDot(props: {
 export default function PriceVsPredictedPage() {
   const [symbol,  setSymbol]  = useState("AAPL");
   const [period,  setPeriod]  = useState(PERIODS[2]);
+  const [saveImage, setSaveImage] = useState(false);
   const [data,    setData]    = useState<PriceVsPredictedResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
@@ -65,7 +66,7 @@ export default function PriceVsPredictedPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await getPriceVsPredictedChart(symbol, period.days);
+      const res = await getPriceVsPredictedChart(symbol, period.days, null, saveImage);
       setData(res);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -110,7 +111,7 @@ export default function PriceVsPredictedPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-50">Historical Price vs ML Predicted</h1>
           <p className="mt-1 text-sm text-slate-400">
-            Actual close overlaid with ML ensemble up-probability. Buy/sell crossover signals marked. PNG saved to server.
+            Actual close overlaid with chosen-model up-probability. Buy/sell crossover signals marked.
           </p>
         </div>
 
@@ -143,6 +144,15 @@ export default function PriceVsPredictedPage() {
           >
             {loading ? "Loading…" : "Load"}
           </button>
+          <label className="mt-auto flex items-center gap-2 rounded border border-slate-700 bg-slate-800/50 px-3 py-1.5 text-xs text-slate-300">
+            <input
+              type="checkbox"
+              checked={saveImage}
+              onChange={(e) => setSaveImage(e.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            Save PNG
+          </label>
         </div>
 
         {error && (
