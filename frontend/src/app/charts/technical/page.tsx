@@ -15,6 +15,7 @@ import {
   Bar,
 } from "recharts";
 import { getTechnicalChart } from "@/lib/api-client";
+import { getCachedChartData, setCachedChartData } from "@/lib/chart-cache";
 import type { TechnicalResult, TechnicalPoint } from "@/lib/types";
 import { RequireAuth } from "@/components/require-auth";
 
@@ -43,14 +44,29 @@ export default function TechnicalPage() {
   const [period, setPeriod] = useState(PERIODS[1]);
   const [data, setData]     = useState<TechnicalResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showingCached, setShowingCached] = useState(false);
   const [error, setError]   = useState<string | null>(null);
 
+  function cacheKey() {
+    return `technical:${symbol}:${period.days}`;
+  }
+
   async function load(savePng = false) {
+    const key = cacheKey();
+    if (!savePng) {
+      const cached = getCachedChartData<TechnicalResult>(key);
+      if (cached) {
+        setData(cached);
+        setShowingCached(true);
+      }
+    }
     setLoading(true);
     setError(null);
     try {
       const res = await getTechnicalChart(symbol, period.days, null, savePng);
       setData(res);
+      setShowingCached(false);
+      if (!savePng) setCachedChartData(key, res);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -73,6 +89,9 @@ export default function TechnicalPage() {
           <p className="mt-1 text-sm text-slate-400">
             ML model-driven RSI and MACD views. PNG saves only when enabled.
           </p>
+          {showingCached && (
+            <p className="mt-1 text-xs text-amber-400">Showing cached data. Refreshing in background…</p>
+          )}
         </div>
 
         {/* Controls */}

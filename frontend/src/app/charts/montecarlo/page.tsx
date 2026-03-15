@@ -17,6 +17,7 @@ import {
   ReferenceLine,
 } from "recharts";
 import { getMonteCarloChart } from "@/lib/api-client";
+import { getCachedChartData, setCachedChartData } from "@/lib/chart-cache";
 import type { MonteCarloResult } from "@/lib/types";
 import { RequireAuth } from "@/components/require-auth";
 
@@ -50,14 +51,29 @@ export default function MonteCarloPage() {
   const [nSim, setNSim]         = useState(500);
   const [data, setData]         = useState<MonteCarloResult | null>(null);
   const [loading, setLoading]   = useState(false);
+  const [showingCached, setShowingCached] = useState(false);
   const [error, setError]       = useState<string | null>(null);
 
+  function cacheKey() {
+    return `montecarlo:${symbol}:${horizon.days}:${nSim}`;
+  }
+
   async function load(savePng = false) {
+    const key = cacheKey();
+    if (!savePng) {
+      const cached = getCachedChartData<MonteCarloResult>(key);
+      if (cached) {
+        setData(cached);
+        setShowingCached(true);
+      }
+    }
     setLoading(true);
     setError(null);
     try {
       const res = await getMonteCarloChart(symbol, 730, nSim, horizon.days, null, savePng);
       setData(res);
+      setShowingCached(false);
+      if (!savePng) setCachedChartData(key, res);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -102,6 +118,9 @@ export default function MonteCarloPage() {
           <p className="mt-1 text-sm text-slate-400">
             ML model-driven price path simulation with percentile fan and final-price distribution.
           </p>
+          {showingCached && (
+            <p className="mt-1 text-xs text-amber-400">Showing cached data. Refreshing in background…</p>
+          )}
         </div>
 
         {/* Controls */}

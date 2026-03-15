@@ -17,6 +17,7 @@ import {
   ReferenceLine,
 } from "recharts";
 import { getPriceVsPredictedChart } from "@/lib/api-client";
+import { getCachedChartData, setCachedChartData } from "@/lib/chart-cache";
 import type { PriceVsPredictedResult } from "@/lib/types";
 import { RequireAuth } from "@/components/require-auth";
 
@@ -59,14 +60,29 @@ export default function PriceVsPredictedPage() {
   const [period,  setPeriod]  = useState(PERIODS[2]);
   const [data,    setData]    = useState<PriceVsPredictedResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showingCached, setShowingCached] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
 
+  function cacheKey() {
+    return `price-vs-pred:${symbol}:${period.days}`;
+  }
+
   async function load(savePng = false) {
+    const key = cacheKey();
+    if (!savePng) {
+      const cached = getCachedChartData<PriceVsPredictedResult>(key);
+      if (cached) {
+        setData(cached);
+        setShowingCached(true);
+      }
+    }
     setLoading(true);
     setError(null);
     try {
       const res = await getPriceVsPredictedChart(symbol, period.days, null, savePng);
       setData(res);
+      setShowingCached(false);
+      if (!savePng) setCachedChartData(key, res);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -112,6 +128,9 @@ export default function PriceVsPredictedPage() {
           <p className="mt-1 text-sm text-slate-400">
             Actual close overlaid with chosen-model up-probability. Buy/sell crossover signals marked.
           </p>
+          {showingCached && (
+            <p className="mt-1 text-xs text-amber-400">Showing cached data. Refreshing in background…</p>
+          )}
         </div>
 
         {/* Controls */}

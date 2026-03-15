@@ -14,6 +14,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { getRiskDashboardChart } from "@/lib/api-client";
+import { getCachedChartData, setCachedChartData } from "@/lib/chart-cache";
 import type { RiskDashboardResult } from "@/lib/types";
 import { RequireAuth } from "@/components/require-auth";
 
@@ -36,14 +37,29 @@ function corrColor(val: number): string {
 export default function RiskDashboardPage() {
   const [data,    setData]    = useState<RiskDashboardResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showingCached, setShowingCached] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
 
+  function cacheKey() {
+    return "risk-dashboard:current-user";
+  }
+
   async function load(savePng = false) {
+    const key = cacheKey();
+    if (!savePng) {
+      const cached = getCachedChartData<RiskDashboardResult>(key);
+      if (cached) {
+        setData(cached);
+        setShowingCached(true);
+      }
+    }
     setLoading(true);
     setError(null);
     try {
       const res = await getRiskDashboardChart(null, savePng);
       setData(res);
+      setShowingCached(false);
+      if (!savePng) setCachedChartData(key, res);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -74,6 +90,9 @@ export default function RiskDashboardPage() {
             <p className="mt-1 text-sm text-slate-400">
               VaR / CVaR, rolling volatility, drawdown and asset correlation using ML-weighted exposures.
             </p>
+            {showingCached && (
+              <p className="mt-1 text-xs text-amber-400">Showing cached data. Refreshing in background…</p>
+            )}
           </div>
           <button
             onClick={() => load(false)}
