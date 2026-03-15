@@ -158,13 +158,14 @@ export default function AdminPage() {
       setUserDetail(null);
       return;
     }
+    const userId = selectedUserId;
 
     let cancelled = false;
 
     async function loadDetail() {
       try {
         setDetailLoading(true);
-        const detail = await adminGetUserDetail(selectedUserId);
+        const detail = await adminGetUserDetail(userId);
         if (cancelled) return;
         setUserDetail(detail);
         setStatusDraft(detail.security.status);

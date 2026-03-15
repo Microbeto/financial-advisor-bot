@@ -156,6 +156,10 @@ def _claims_required(authorization: str | None) -> dict[str, str]:
     return claims
 
 
+def _utc_iso_z(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
