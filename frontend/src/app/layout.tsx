@@ -14,22 +14,24 @@ function SettingsIcon(props: React.SVGProps<SVGSVGElement>) {
       aria-hidden="true"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.9"
+      strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
       {...props}
     >
-      <path
-        d="M14.5 3.5 15 5.2a1 1 0 0 0 .8.7l1.8.3a1 1 0 0 1 .7.4l1.2 1.6a1 1 0 0 1 .1.8l-.7 1.7a1 1 0 0 0 0 .9l.7 1.7a1 1 0 0 1-.1.8l-1.2 1.6a1 1 0 0 1-.7.4l-1.8.3a1 1 0 0 0-.8.7l-.5 1.7a1 1 0 0 1-.6.6l-1.7.5a1 1 0 0 1-.8-.1l-1.6-1.2a1 1 0 0 0-.9 0l-1.6 1.2a1 1 0 0 1-.8.1l-1.7-.5a1 1 0 0 1-.6-.6l-.5-1.7a1 1 0 0 0-.8-.7l-1.8-.3a1 1 0 0 1-.7-.4l-1.2-1.6a1 1 0 0 1-.1-.8l.7-1.7a1 1 0 0 0 0-.9l-.7-1.7a1 1 0 0 1 .1-.8l1.2-1.6a1 1 0 0 1 .7-.4l1.8-.3a1 1 0 0 0 .8-.7l.5-1.7a1 1 0 0 1 .6-.6l1.7-.5a1 1 0 0 1 .8.1l1.6 1.2a1 1 0 0 0 .9 0l1.6-1.2a1 1 0 0 1 .8-.1l1.7.5a1 1 0 0 1 .6.6Z"
-      />
-      <circle cx="12" cy="12" r="3" />
+      <line x1="4" y1="6" x2="20" y2="6" />
+      <circle cx="9" cy="6" r="2" />
+      <line x1="4" y1="12" x2="20" y2="12" />
+      <circle cx="15" cy="12" r="2" />
+      <line x1="4" y1="18" x2="20" y2="18" />
+      <circle cx="11" cy="18" r="2" />
     </svg>
   );
 }
 
 function TopNav() {
   const pathname = usePathname();
-  const { role, isSignedIn, signOut } = useAuth();
+  const { isSignedIn, signOut } = useAuth();
 
   const mainItems = [
     { href: "/dashboard", label: "Dashboard" },
@@ -87,21 +89,6 @@ function TopNav() {
               >
                 <SettingsIcon className="h-5 w-5" />
               </Link>
-
-              {/* Admin panel link: only if signed in AND role is admin */}
-              {isSignedIn && role === "admin" && (
-                <Link
-                  href="/admin"
-                  className={[
-                    "hidden rounded-full px-3 py-1 text-xs font-medium transition-colors md:inline-block",
-                    pathname === "/admin"
-                      ? "bg-amber-500/20 text-amber-200 border border-amber-400/60"
-                      : "border border-slate-700 text-slate-300 hover:border-amber-400/60 hover:text-amber-200",
-                  ].join(" ")}
-                >
-                  Admin panel
-                </Link>
-              )}
 
               <button
                 type="button"
