@@ -151,8 +151,8 @@ class _NewsFinBertInferencer:
 
         model_name = os.getenv("FINBERT_MODEL_NAME", "ProsusAI/finbert").strip() or "ProsusAI/finbert"
         cache_dir = os.getenv("FINBERT_CACHE_DIR", "").strip() or None
-
-        for local_only in (True, False):
+        local_only_modes = (True,)
+        for local_only in local_only_modes:
             try:
                 kwargs = {"local_files_only": local_only}
                 if cache_dir:
