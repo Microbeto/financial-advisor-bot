@@ -319,7 +319,8 @@ class _FinBertInferencer:
         errors: List[str] = []
 
         for model_name in candidates:
-            for local_only in (True, False):
+            local_only_modes = (True,)
+            for local_only in local_only_modes:
                 mode = "cache-only" if local_only else "download"
                 try:
                     kwargs: Dict[str, Any] = {"local_files_only": local_only}
