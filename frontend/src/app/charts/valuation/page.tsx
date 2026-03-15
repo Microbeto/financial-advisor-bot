@@ -37,6 +37,7 @@ export default function ValuationPage() {
   const [symbol,   setSymbol]   = useState("AAPL");
   const [period,   setPeriod]   = useState(PERIODS[1]);
   const [bbPeriod, setBbPeriod] = useState(20);
+  const [saveImage, setSaveImage] = useState(false);
   const [data,     setData]     = useState<ValuationResult | null>(null);
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState<string | null>(null);
@@ -45,7 +46,7 @@ export default function ValuationPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await getValuationChart(symbol, period.days, bbPeriod);
+      const res = await getValuationChart(symbol, period.days, bbPeriod, null, saveImage);
       setData(res);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -103,7 +104,7 @@ export default function ValuationPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-50">Valuation Confidence Intervals</h1>
           <p className="mt-1 text-sm text-slate-400">
-            Bollinger Band envelopes (±1σ / ±2σ), %B oscillator, and linear price trend. PNG saved to server.
+            ML model-driven Bollinger-style confidence envelopes, %B oscillator, and trend view.
           </p>
         </div>
 
@@ -146,6 +147,15 @@ export default function ValuationPage() {
           >
             {loading ? "Loading…" : "Analyze"}
           </button>
+          <label className="mt-auto flex items-center gap-2 rounded border border-slate-700 bg-slate-800/50 px-3 py-1.5 text-xs text-slate-300">
+            <input
+              type="checkbox"
+              checked={saveImage}
+              onChange={(e) => setSaveImage(e.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            Save PNG
+          </label>
         </div>
 
         {error && (
