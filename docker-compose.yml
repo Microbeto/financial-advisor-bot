@@ -1,4 +1,14 @@
 services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: fab-ollama
+    restart: unless-stopped
+    profiles: ["llm"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
   mongo:
     image: mongo:7
     container_name: fab-mongo
@@ -22,6 +32,9 @@ services:
       APP_SECRET: ${APP_SECRET:-dev-only-change-this-secret}
       ADMIN_BOOTSTRAP_EMAIL: ${ADMIN_BOOTSTRAP_EMAIL:-admin@example.com}
       ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:-Admin@12345}
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_TAGS_URL: http://ollama:11434/api/tags
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:1b}
       MONGO_URL: mongodb://mongo:27017
       MONGO_DB: financial_advisor_bot
       HOST: 0.0.0.0
@@ -67,3 +80,4 @@ services:
 
 volumes:
   mongo_data:
+  ollama_data:
