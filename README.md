@@ -39,8 +39,6 @@ This is how the project can run on a fresh computer with only Docker Desktop ins
 
 ## LLM requirements
 
-You do not need local Python/Node/Mongo installs.
-
 LLM features are optional and need an Ollama runtime plus a pulled model. There are two ways:
 
 1. Host-installed Ollama (manual):
