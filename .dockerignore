@@ -1,0 +1,11 @@
+.git
+.gitignore
+.vscode
+.pytest_cache
+venv
+**/__pycache__
+**/*.pyc
+frontend/.next
+frontend/node_modules
+backend/.cache
+backend/.mongo-data
