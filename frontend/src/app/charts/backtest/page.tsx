@@ -1,3 +1,4 @@
+// Backtest performance visualization showing strategy returns, equity curves, and Sharpe ratios.
 "use client";
 
 import { useEffect, useState } from "react";

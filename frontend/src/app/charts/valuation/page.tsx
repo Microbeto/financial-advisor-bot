@@ -1,3 +1,4 @@
+// Valuation metrics visualization with Bollinger Bands and price action indicators.
 "use client";
 
 import { useEffect, useState } from "react";

@@ -1,3 +1,4 @@
+// Risk analytics dashboard showing portfolio volatility, correlation, and drawdown analysis.
 "use client";
 
 import { useEffect, useState } from "react";

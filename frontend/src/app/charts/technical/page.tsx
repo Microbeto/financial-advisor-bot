@@ -1,3 +1,4 @@
+// Technical analysis indicators (RSI, MACD) visualization with overbought/oversold signals.
 "use client";
 
 import { useEffect, useState } from "react";

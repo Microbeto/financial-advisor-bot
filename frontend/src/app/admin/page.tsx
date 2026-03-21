@@ -1,3 +1,4 @@
+// Admin dashboard for managing users, cache, ML models, and system diagnostics.
 "use client";
 
 import { useEffect, useState } from "react";

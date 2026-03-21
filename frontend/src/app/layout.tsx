@@ -1,3 +1,4 @@
+// Root layout component with navigation, authentication, and styling configuration.
 "use client";
 
 import "./globals.css";
@@ -7,6 +8,7 @@ import { usePathname } from "next/navigation";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { StockBackground } from "@/components/stock-background";
 
+// SVG icon component for settings button in the top navigation bar.
 function SettingsIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg
@@ -29,6 +31,7 @@ function SettingsIcon(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
+// Top navigation bar displaying app logo, navigation links, and sign-out button.
 function TopNav() {
   const pathname = usePathname();
   const { isSignedIn, signOut } = useAuth();

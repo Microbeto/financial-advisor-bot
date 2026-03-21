@@ -1,3 +1,4 @@
+// Charts index page with navigation to backtest, technical, Monte Carlo, and valuation visualizations.
 "use client";
 
 import Link from "next/link";

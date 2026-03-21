@@ -1,10 +1,13 @@
+// Chart data client-side caching with localStorage using time-based expiry.
 const CACHE_PREFIX = "chart-cache:v1:";
 
+// Wrapper structure to track when cached data was saved.
 type CacheEnvelope<T> = {
   savedAt: number;
   data: T;
 };
 
+// Retrieve cached data envelope from localStorage, returning null if not found or invalid.
 function readEnvelope<T>(key: string): CacheEnvelope<T> | null {
   if (typeof window === "undefined") return null;
   try {
@@ -18,6 +21,7 @@ function readEnvelope<T>(key: string): CacheEnvelope<T> | null {
   }
 }
 
+// Get cached chart data if it exists and is not older than maxAgeMs (default 30 minutes).
 export function getCachedChartData<T>(key: string, maxAgeMs = 1000 * 60 * 30): T | null {
   const env = readEnvelope<T>(key);
   if (!env) return null;
@@ -26,6 +30,7 @@ export function getCachedChartData<T>(key: string, maxAgeMs = 1000 * 60 * 30): T
   return env.data;
 }
 
+// Store chart data in localStorage with current timestamp for expiry tracking.
 export function setCachedChartData<T>(key: string, data: T): void {
   if (typeof window === "undefined") return;
   try {

@@ -1,4 +1,5 @@
 // frontend/src/app/dashboard/page.tsx
+// Dashboard page displaying daily signals, market trends, and recommended stocks.
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -9,10 +10,12 @@ import type { DailySignals, SignalTopItem, NewsItem } from "@/lib/types";
 type HistoryPoint = { t: string; o?: number; h?: number; l?: number; c: number; v?: number };
 type History = { symbol: string; points: HistoryPoint[] };
 
+// Restrict numeric value between lower and upper bounds (inclusive).
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
 
+// Remove trailing periods and whitespace from text string.
 function stripTrailingPunctuation(s: string) {
   return (s || "").replace(/[.\s]+$/, "");
 }

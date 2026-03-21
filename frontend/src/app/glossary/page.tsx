@@ -1,4 +1,5 @@
 // frontend/src/app/glossary/page.tsx
+// Financial terminology glossary page with search, definitions, and term explanations.
 "use client";
 
 import { useEffect, useMemo, useState } from "react";

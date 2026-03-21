@@ -1,3 +1,4 @@
+// Animated stock market visualization background component with chart graphics and gradients.
 "use client";
 
 export function StockBackground() {

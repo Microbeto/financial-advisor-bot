@@ -1,9 +1,11 @@
+// Authentication guard component that redirects unauthenticated users to sign-in page.
 "use client";
 
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 
+// Wrapper component that conditionally renders children only when user is signed in.
 export function RequireAuth({ children }: { children: ReactNode }) {
   const { isSignedIn } = useAuth();
 

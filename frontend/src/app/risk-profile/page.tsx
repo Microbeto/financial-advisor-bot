@@ -1,3 +1,4 @@
+// Risk profile configuration page for setting investment horizons and drawdown limits.
 "use client";
 
 import { useEffect, useState } from "react";

@@ -1,3 +1,4 @@
+// Portfolio management page for viewing holdings, market prices, and ML-based recommendations.
 "use client";
 
 import { useEffect, useState } from "react";

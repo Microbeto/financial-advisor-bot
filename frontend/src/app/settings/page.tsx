@@ -1,3 +1,4 @@
+// User settings and preferences page for managing notifications and display options.
 "use client";
 
 import { useEffect, useState } from "react";

@@ -1,3 +1,4 @@
+// ML model prediction accuracy visualization comparing predicted vs actual stock prices.
 "use client";
 
 import { useEffect, useState } from "react";

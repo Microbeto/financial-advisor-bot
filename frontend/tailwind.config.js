@@ -1,3 +1,4 @@
+// Tailwind CSS configuration specifying template content paths and theme extensions.
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [

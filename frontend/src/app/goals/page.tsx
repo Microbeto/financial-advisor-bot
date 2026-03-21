@@ -1,3 +1,4 @@
+// Financial goals page for setting and tracking investment objectives and target allocations.
 "use client";
 
 import { useEffect, useState } from "react";

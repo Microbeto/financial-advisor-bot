@@ -1,3 +1,4 @@
+// Monte Carlo simulation visualization with probabilistic price projections and percentile bands.
 "use client";
 
 import { useEffect, useState } from "react";

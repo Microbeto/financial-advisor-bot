@@ -1,4 +1,5 @@
 // frontend/src/lib/auth-context.tsx
+// Authentication context provider managing user state, login, and sign-out flows.
 "use client";
 
 import {
@@ -36,6 +37,7 @@ const ROLE_KEY = "advisor_role";
 const USER_KEY = "advisor_user";
 const TOKEN_KEY = "advisor_token";
 
+// Derive user role from UserPublic object, defaulting to "guest" for unauthenticated users.
 function roleFromUser(u: UserPublic | null): Role {
   if (!u) return "guest";
   const r = (u.role || "user").toString().toLowerCase();
@@ -45,6 +47,7 @@ function roleFromUser(u: UserPublic | null): Role {
   return "user";
 }
 
+// Parse stored JSON user data, validating structure and normalizing user_id field.
 function safeParseUser(raw: string | null): UserPublic | null {
   if (!raw) return null;
   try {
@@ -67,6 +70,7 @@ function safeParseUser(raw: string | null): UserPublic | null {
   }
 }
 
+// Load stored authentication state from browser localStorage, returning defaults if unavailable.
 function loadStored(): { role: Role; user: UserPublic | null; token: string | null } {
   if (typeof window === "undefined") return { role: "guest", user: null, token: null };
 

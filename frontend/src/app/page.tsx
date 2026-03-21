@@ -1,3 +1,4 @@
+// Home page component for login/registration flow.
 "use client";
 
 import { useState } from "react";
@@ -5,6 +6,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 
+// Main page component that displays authentication UI.
 export default function HomePage() {
   const { isSignedIn, login, register } = useAuth();
   const router = useRouter();

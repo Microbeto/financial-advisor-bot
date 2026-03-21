@@ -1,3 +1,4 @@
+// Audit log page displaying signal generation history, model performance, and system events.
 "use client";
 
 import { useEffect, useState } from "react";
