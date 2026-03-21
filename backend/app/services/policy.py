@@ -1,3 +1,4 @@
+# Policy engine module defining hard access and action constraints based on profile and regime.
 # Structure: policy engine module defining hard access/action constraints from profile and regime inputs.
 from __future__ import annotations
 

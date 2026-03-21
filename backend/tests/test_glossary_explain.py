@@ -1,3 +1,4 @@
+# Unit tests for glossary service including term definitions and LLM-based explanations.
 from __future__ import annotations
 
 import sys

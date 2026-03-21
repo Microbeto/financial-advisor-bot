@@ -1,3 +1,4 @@
+# FastAPI application initialization with routes for authentication, signals, ML workflow, and admin management.
 from __future__ import annotations
 
 import inspect
@@ -1330,9 +1331,7 @@ def create_app() -> FastAPI:
         out = pe.update_global_constraints(add=req.add, remove=req.remove)
         return PolicyConstraintResponse(constraints=out)
 
-    # -------------------------------------------------------------------------
     # Chart / Visualization endpoints
-    # -------------------------------------------------------------------------
 
     def _safe_float(v: Any, default: float = 0.0) -> float:
         try:

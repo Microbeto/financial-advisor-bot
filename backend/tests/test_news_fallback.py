@@ -1,3 +1,4 @@
+# Unit tests for news service including RSS feed parsing and sentiment scoring.
 from __future__ import annotations
 
 import sys
