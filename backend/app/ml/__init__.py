@@ -1,3 +1,4 @@
+# Machine learning module with ensemble combiners, tournament selection, and model routing.
 from .grand_ensemble import GrandEnsembleCombiner
 from .meta_interface import MetaCombiner
 from .model_router import IntelligenceRouter, intelligence_router

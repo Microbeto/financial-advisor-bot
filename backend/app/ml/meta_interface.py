@@ -1,3 +1,4 @@
+# Abstract base class and utility functions for meta-combiner models used in ensemble learning.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

@@ -20,10 +20,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
 # Internal helpers
-# ---------------------------------------------------------------------------
-
 def _ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
@@ -68,10 +65,7 @@ def _xtick_labels(labels: List[str], ax: Any, max_ticks: int = 10) -> None:
                        rotation=35, ha="right", fontsize=7)
 
 
-# ---------------------------------------------------------------------------
-# 1 – Backtest Performance Report
-# ---------------------------------------------------------------------------
-
+# Backtest Performance Report
 def run_backtest_chart(
     prices: List[Dict[str, Any]],
     symbol: str,
@@ -98,7 +92,7 @@ def run_backtest_chart(
         if len(closes) < 2:
             return {"error": "insufficient price data"}
 
-        # ---------- Equity curves ----------
+Equity curves ----------
         # Simple buy-and-hold: buy on day 0, sell on last day
         n = len(closes)
         start_price = float(closes[0])
@@ -131,7 +125,7 @@ def run_backtest_chart(
 
         alpha = after_friction_return - bench_return
 
-        # ---------- Risk metrics ----------
+Risk metrics ----------
         daily_returns = np.diff(closes) / closes[:-1]
         trading_days  = 252.0
         ann_vol = float(np.std(daily_returns, ddof=1) * math.sqrt(trading_days)) if len(daily_returns) > 1 else 0.0
@@ -147,7 +141,7 @@ def run_backtest_chart(
         drawdowns   = (strategy_equity - running_max) / np.where(running_max > 0, running_max, 1.0)
         max_drawdown = float(np.min(drawdowns))
 
-        # ---------- Build time-series for the frontend ----------
+Build time-series for the frontend ----------
         equity_series = [
             {"t": dates[i] if i < len(dates) else str(i),
              "strategy": round(float(strategy_equity[i]), 2),
@@ -184,7 +178,7 @@ def run_backtest_chart(
             "drawdown_series":         drawdown_series,
         }
 
-        # ---------- Save PNG (opt-in) ----------
+Save PNG (opt-in) ----------
         if save_image:
             _save_backtest_png(summary, symbol, base_dir)
 
@@ -310,10 +304,7 @@ def _save_backtest_png(s: Dict[str, Any], symbol: str, base_dir: Path) -> None:
             pass
 
 
-# ---------------------------------------------------------------------------
-# 2 – Technical Indicators: RSI & MACD
-# ---------------------------------------------------------------------------
-
+# Technical Indicators: RSI and MACD
 def _compute_rsi(closes: np.ndarray, period: int = 14) -> np.ndarray:
     """Returns RSI array (same length as closes; first `period` entries = NaN)."""
     deltas = np.diff(closes)
@@ -501,10 +492,7 @@ def _save_technical_png(
             pass
 
 
-# ---------------------------------------------------------------------------
-# 3 – Monte Carlo Simulation + Percentile Breakdown
-# ---------------------------------------------------------------------------
-
+# Monte Carlo Simulation and Percentile Breakdown
 def run_montecarlo_chart(
     prices: List[Dict[str, Any]],
     symbol: str,
@@ -682,10 +670,7 @@ def _save_montecarlo_png(
             pass
 
 
-# ---------------------------------------------------------------------------
-# 4 – Valuation Confidence Intervals (Bollinger Bands + historical range)
-# ---------------------------------------------------------------------------
-
+# Valuation Confidence Intervals (Bollinger Bands and Historical Range)
 def run_valuation_confidence_chart(
     prices: List[Dict[str, Any]],
     symbol: str,
@@ -864,10 +849,7 @@ def _save_valuation_confidence_png(
             pass
 
 
-# ---------------------------------------------------------------------------
-# 5 – Historical Price vs Predicted Price
-# ---------------------------------------------------------------------------
-
+# Historical Price vs Predicted Price
 def run_price_vs_predicted_chart(
     prices: List[Dict[str, Any]],
     symbol: str,
@@ -1044,10 +1026,7 @@ def _save_price_vs_predicted_png(
             pass
 
 
-# ---------------------------------------------------------------------------
-# 6 – Risk Dashboard
-# ---------------------------------------------------------------------------
-
+# Risk Dashboard
 def run_risk_dashboard_chart(
     portfolio: Dict[str, Any],
     price_histories: Dict[str, List[Dict[str, Any]]],

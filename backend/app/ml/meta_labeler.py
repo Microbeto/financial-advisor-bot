@@ -1,3 +1,4 @@
+# Meta-labeler combiner using random forest to calibrate consensus predictions and confidence signals.
 from __future__ import annotations
 
 import math

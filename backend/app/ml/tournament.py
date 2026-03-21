@@ -1,3 +1,4 @@
+# Walk-forward tournament framework for comparing and ranking meta-combiner models.
 from __future__ import annotations
 
 from dataclasses import dataclass

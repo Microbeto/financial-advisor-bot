@@ -1,3 +1,4 @@
+# Intelligence router for system diagnostics, capability detection, and model serving infrastructure.
 from __future__ import annotations
 
 import logging

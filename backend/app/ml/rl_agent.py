@@ -1,3 +1,4 @@
+# Reinforcement learning agent combiner using temporal-difference Q-learning for online portfolio optimization.
 from __future__ import annotations
 
 import numpy as np

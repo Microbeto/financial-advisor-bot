@@ -1,3 +1,4 @@
+# Grand ensemble meta-combiner that blends multiple sub-models using performance-weighted softmax.
 from __future__ import annotations
 
 from typing import Callable, List, Optional

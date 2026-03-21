@@ -1,3 +1,4 @@
+# Regime-switching ensemble that adapts model weights based on volatility regimes detected via EWMA.
 from __future__ import annotations
 from typing import Dict
 import numpy as np
