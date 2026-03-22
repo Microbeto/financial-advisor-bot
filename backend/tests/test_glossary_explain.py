@@ -43,6 +43,7 @@ def _prepare_app(monkeypatch: pytest.MonkeyPatch, *, ollama_available: bool) -> 
     return TestClient(app)
 
 
+# Test: glossary explain existing term short circuits llm.
 def test_glossary_explain_existing_term_short_circuits_llm(monkeypatch: pytest.MonkeyPatch):
     async def _should_not_call_health(self):
         # Existing terms should bypass LLM health checks.
@@ -68,6 +69,7 @@ def test_glossary_explain_existing_term_short_circuits_llm(monkeypatch: pytest.M
     assert "price moves day to day" in body["definition"]
 
 
+# Test: glossary explain llm path with mocked generation.
 def test_glossary_explain_llm_path_with_mocked_generation(monkeypatch: pytest.MonkeyPatch):
     async def _healthy(self):
         # Simulate healthy local inference service.
@@ -95,6 +97,7 @@ def test_glossary_explain_llm_path_with_mocked_generation(monkeypatch: pytest.Mo
     assert glossary_engine.lingo_glossary().get("convexity") == body["definition"]
 
 
+# Test: glossary explain fallback when llm unavailable.
 def test_glossary_explain_fallback_when_llm_unavailable(monkeypatch: pytest.MonkeyPatch):
     async def _should_not_call_health(self):
         # If router says unavailable, health check must never execute.

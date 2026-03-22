@@ -9,6 +9,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from app.services.market import _merge_pit_points
 
 
+# Test: merge pit points preserves existing history values.
 def test_merge_pit_points_preserves_existing_history_values():
     existing = [
         {"t": "2024-01-02", "c": 101.0},
@@ -26,6 +27,7 @@ def test_merge_pit_points_preserves_existing_history_values():
     assert float(by_date["2024-01-04"]["c"]) == 103.0
 
 
+# Test: merge pit points appends new dates and keeps sorted order.
 def test_merge_pit_points_appends_new_dates_and_keeps_sorted_order():
     existing = [
         {"t": "2024-01-05", "c": 105.0},

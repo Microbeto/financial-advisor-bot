@@ -11,6 +11,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from app.services.news import _parse_yahoo_rss_feed, _score_title
 
 
+# Test: parse yahoo rss feed normalizes items.
 def test_parse_yahoo_rss_feed_normalizes_items():
     xml_text = """
     <rss version="2.0">
@@ -38,6 +39,7 @@ def test_parse_yahoo_rss_feed_normalizes_items():
     assert item["seendate"] == "20260307100000"
 
 
+# Test: parse yahoo rss feed respects max items.
 def test_parse_yahoo_rss_feed_respects_max_items():
     xml_text = """
     <rss version="2.0">
@@ -53,6 +55,7 @@ def test_parse_yahoo_rss_feed_respects_max_items():
     assert len(out) == 2
 
 
+# Test: score title cascade escalates ambiguous to finbert.
 def test_score_title_cascade_escalates_ambiguous_to_finbert(monkeypatch: pytest.MonkeyPatch):
     class _StubFinBert:
         @staticmethod

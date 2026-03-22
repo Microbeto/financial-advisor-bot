@@ -51,6 +51,7 @@ def _spearman_rank_correlation(x: np.ndarray, y: np.ndarray) -> float:
     return float(corr) if np.isfinite(corr) else 0.0
 
 
+# Test: sentiment scoring positive negative.
 def test_sentiment_scoring_positive_negative():
     pos = _sentiment_score_text("Company beats earnings and gets upgrade with strong growth")
     neg = _sentiment_score_text("Company misses estimates and faces lawsuit with weak guidance")
@@ -59,6 +60,7 @@ def test_sentiment_scoring_positive_negative():
     assert neg < 0.0
 
 
+# Test: technical features shape and values.
 def test_technical_features_shape_and_values():
     closes = [float(100 + i) for i in range(40)]
     feats = _technical_features(closes)
@@ -68,6 +70,7 @@ def test_technical_features_shape_and_values():
     assert feats[2] > 0.0
 
 
+# Test: rank models orders by weighted score.
 def test_rank_models_orders_by_weighted_score():
     m1 = {
         "algorithm": "a",
@@ -87,6 +90,7 @@ def test_rank_models_orders_by_weighted_score():
     assert ranked[1]["rank"] == 2
 
 
+# Test: weighted score prefers f1.
 def test_weighted_score_prefers_f1():
     high_f1 = _weighted_score({"accuracy": 0.70, "precision": 0.70, "recall": 0.70, "f1": 0.90})
     low_f1 = _weighted_score({"accuracy": 0.80, "precision": 0.80, "recall": 0.80, "f1": 0.50})
@@ -94,6 +98,7 @@ def test_weighted_score_prefers_f1():
     assert high_f1 > low_f1
 
 
+# Test: weighted score prefers lower future price error.
 def test_weighted_score_prefers_lower_future_price_error():
     low_error = _weighted_score(
         {
@@ -117,6 +122,7 @@ def test_weighted_score_prefers_lower_future_price_error():
     assert low_error > high_error
 
 
+# Test: weighted score prioritizes institutional risk metrics.
 def test_weighted_score_prioritizes_institutional_risk_metrics():
     strong_institutional = _weighted_score(
         {
@@ -144,6 +150,7 @@ def test_weighted_score_prioritizes_institutional_risk_metrics():
     assert strong_institutional > weak_institutional
 
 
+# Test: rank models prefers lower future price error when available.
 def test_rank_models_prefers_lower_future_price_error_when_available():
     lower_price_error = {
         "algorithm": "low_price_err",
@@ -172,6 +179,7 @@ def test_rank_models_prefers_lower_future_price_error_when_available():
     assert ranked[0]["algorithm"] == "low_price_err"
 
 
+# Test: rank models prioritizes sharpe and drawdown with price factor.
 def test_rank_models_prioritizes_sharpe_and_drawdown_with_price_factor():
     institutional_winner = {
         "algorithm": "institutional_winner",
@@ -204,6 +212,7 @@ def test_rank_models_prioritizes_sharpe_and_drawdown_with_price_factor():
     assert ranked[0]["algorithm"] == "institutional_winner"
 
 
+# Test: feature stability for flat prices.
 def test_feature_stability_for_flat_prices():
     closes = list(np.repeat(100.0, 50))
     feats = _technical_features(closes)
@@ -213,6 +222,7 @@ def test_feature_stability_for_flat_prices():
     assert feats[2] == 0.0
 
 
+# Test: triple barrier uses volatility scaled thresholds.
 def test_triple_barrier_uses_volatility_scaled_thresholds():
     # Returns here are sub-1%, so static TP=2.0 would never trigger.
     closes = [100.0, 100.2, 100.0, 100.3, 100.1, 100.5, 101.2, 101.5]
@@ -220,6 +230,7 @@ def test_triple_barrier_uses_volatility_scaled_thresholds():
     assert label == 1
 
 
+# Test: walk forward splits apply purge gap.
 def test_walk_forward_splits_apply_purge_gap():
     splits = _build_walk_forward_splits(
         n_samples=300,
@@ -236,12 +247,14 @@ def test_walk_forward_splits_apply_purge_gap():
         assert int(np.max(tr_idx)) <= (te_start - 11)
 
 
+# Test: prune candidates only when at capacity.
 def test_prune_candidates_only_when_at_capacity():
     docs = [{"model_id": "a", "is_selected": True}, {"model_id": "b", "is_selected": False}]
     out = _select_prune_candidates(docs, max_models=10)
     assert out == []
 
 
+# Test: prune candidates non selected at capacity.
 def test_prune_candidates_non_selected_at_capacity():
     docs = [{"model_id": "s", "is_selected": True}] + [
         {"model_id": f"m{i}", "is_selected": False} for i in range(1, 10)
@@ -251,6 +264,7 @@ def test_prune_candidates_non_selected_at_capacity():
     assert all(not x["is_selected"] for x in out)
 
 
+# Test: tournament stats returns empty for non tournament.
 def test_tournament_stats_returns_empty_for_non_tournament(monkeypatch):
     monkeypatch.setattr(
         "app.services.ml_workflow._selected_or_latest_model",
@@ -264,6 +278,7 @@ def test_tournament_stats_returns_empty_for_non_tournament(monkeypatch):
     assert out["competitor_stats"] == {}
 
 
+# Test: tournament stats extracts stats from bundle.
 def test_tournament_stats_extracts_stats_from_bundle(monkeypatch):
     monkeypatch.setattr(
         "app.services.ml_workflow._selected_or_latest_model",
@@ -292,6 +307,7 @@ def test_tournament_stats_extracts_stats_from_bundle(monkeypatch):
     assert out["competitor_stats"]["rl_agent"]["sharpe"] == 1.2
 
 
+# Test: news coverage gate passes within threshold.
 def test_news_coverage_gate_passes_within_threshold(monkeypatch):
     monkeypatch.setattr("app.services.ml_workflow.ML_ENFORCE_NEWS_COVERAGE", True)
     monkeypatch.setattr("app.services.ml_workflow.ML_MAX_NEWS_MISSING_RATIO", 0.10)
@@ -315,6 +331,7 @@ def test_news_coverage_gate_passes_within_threshold(monkeypatch):
     assert abs(float(report["missing_ratio"]) - 0.1) < 1e-9
 
 
+# Test: news coverage gate fails when missing exceeds threshold.
 def test_news_coverage_gate_fails_when_missing_exceeds_threshold(monkeypatch):
     monkeypatch.setattr("app.services.ml_workflow.ML_ENFORCE_NEWS_COVERAGE", True)
     monkeypatch.setattr("app.services.ml_workflow.ML_MAX_NEWS_MISSING_RATIO", 0.10)
@@ -340,6 +357,7 @@ def test_news_coverage_gate_fails_when_missing_exceeds_threshold(monkeypatch):
         assert float(exc.details.get("missing_ratio") or 0.0) > 0.10
 
 
+# Test: data completeness from news coverage ratio.
 def test_data_completeness_from_news_coverage_ratio():
     out = _data_completeness_from_news_coverage(
         {
@@ -355,6 +373,7 @@ def test_data_completeness_from_news_coverage_ratio():
     assert int(out["news_missing_days"]) == 2
 
 
+# Test: model information coefficient is positive.
 def test_model_information_coefficient_is_positive(monkeypatch):
     # Keep IC evaluation focused on market/price signal by freezing daily news context.
     monkeypatch.setattr("app.services.ml_workflow._daily_news_features", lambda d, symbols: _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[0.0] * 8, news_item_count=1))
@@ -422,6 +441,7 @@ def test_model_information_coefficient_is_positive(monkeypatch):
     assert ic > 0.02, f"Expected IC > 0.02, got {ic:.4f}"
 
 
+# Test: model beats random permutation.
 def test_model_beats_random_permutation(monkeypatch):
     # Freeze news side-features so the test measures price/label structure consistently.
     monkeypatch.setattr("app.services.ml_workflow._daily_news_features", lambda d, symbols: _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[0.0] * 8, news_item_count=1))
@@ -515,6 +535,7 @@ def test_model_beats_random_permutation(monkeypatch):
     assert t_stat > 2.0, f"Expected t-stat > 2.0 for permutation separation, got {t_stat:.4f}"
 
 
+# Test: inflation shock rotates out of tech into defensive or cash.
 def test_inflation_shock_rotates_out_of_tech_into_defensive_or_cash(monkeypatch):
     class _DummyFinBert:
         def score_texts(self, texts):
@@ -601,6 +622,7 @@ def test_inflation_shock_rotates_out_of_tech_into_defensive_or_cash(monkeypatch)
     )
 
 
+# Test: doc to model info reads news coverage ratio from metadata data completeness.
 def test_doc_to_model_info_reads_news_coverage_ratio_from_metadata_data_completeness():
     doc = {
         "model_id": "legacy_1",
@@ -626,6 +648,7 @@ def test_doc_to_model_info_reads_news_coverage_ratio_from_metadata_data_complete
     assert abs(float(out.news_coverage_ratio) - 0.975) < 1e-9
 
 
+# Test: doc to model info reads news coverage ratio from run doc.
 def test_doc_to_model_info_reads_news_coverage_ratio_from_run_doc(monkeypatch):
     class _FakeRuns:
         @staticmethod
@@ -660,6 +683,7 @@ def test_doc_to_model_info_reads_news_coverage_ratio_from_run_doc(monkeypatch):
     assert abs(float(out.news_coverage_ratio) - 0.97) < 1e-9
 
 
+# Test: predict for basket rejects model pipeline mismatch.
 def test_predict_for_basket_rejects_model_pipeline_mismatch(monkeypatch):
     class _ToyModel:
         @staticmethod
@@ -689,6 +713,7 @@ def test_predict_for_basket_rejects_model_pipeline_mismatch(monkeypatch):
         asyncio.run(predict_for_basket(stock_basket=["AAPL", "MSFT"], lookback_days=120, model_id="mismatch_stub"))
 
 
+# Test: predict for basket uses selected docs matching runtime pipeline.
 def test_predict_for_basket_uses_selected_docs_matching_runtime_pipeline(monkeypatch):
     class _ToyModel:
         @staticmethod
@@ -698,9 +723,15 @@ def test_predict_for_basket_uses_selected_docs_matching_runtime_pipeline(monkeyp
             p_up = np.full(n, 0.7, dtype=float)
             return np.column_stack([1.0 - p_up, p_up])
 
-    class _FakeCursor(list):
+    class _FakeCursor:
+        def __init__(self, docs):
+            self._docs = list(docs)
+
         def sort(self, _spec):
             return self
+
+        def __iter__(self):
+            return iter(self._docs)
 
     class _FakeRegistry:
         @staticmethod
@@ -730,10 +761,17 @@ def test_predict_for_basket_uses_selected_docs_matching_runtime_pipeline(monkeyp
     assert len(out.items) == 2
 
 
+# Test: select best models filters by pipeline.
 def test_select_best_models_filters_by_pipeline(monkeypatch):
-    class _FakeCursor(list):
+    class _FakeCursor:
+        def __init__(self, docs):
+            self._docs = list(docs)
+
         def sort(self, _spec):
             return self
+
+        def __iter__(self):
+            return iter(self._docs)
 
     class _FakeRegistry:
         def __init__(self):
@@ -770,10 +808,17 @@ def test_select_best_models_filters_by_pipeline(monkeypatch):
     assert all(not d.get("is_selected") for d in fake_col.docs if d.get("model_id") != "lex_1")
 
 
+# Test: backfill model nlp pipeline uses run metadata.
 def test_backfill_model_nlp_pipeline_uses_run_metadata(monkeypatch):
-    class _FakeCursor(list):
+    class _FakeCursor:
+        def __init__(self, docs):
+            self._docs = list(docs)
+
         def sort(self, _spec):
             return self
+
+        def __iter__(self):
+            return iter(self._docs)
 
     class _FakeRegistry:
         def __init__(self):

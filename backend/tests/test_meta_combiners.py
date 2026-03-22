@@ -121,6 +121,7 @@ def _annualized_sharpe(returns: np.ndarray) -> float:
     return float((np.mean(arr) / std) * np.sqrt(252.0))
 
 
+# Test: meta combiners allocate float in range.
 def test_meta_combiners_allocate_float_in_range():
     base, market, returns, _ = _toy_data(100)
 
@@ -131,6 +132,7 @@ def test_meta_combiners_allocate_float_in_range():
         assert -1.0 <= alloc <= 1.0
 
 
+# Test: walk forward tournament evaluates all competitors.
 def test_walk_forward_tournament_evaluates_all_competitors():
     base, market, returns, splits = _toy_data(120)
 
@@ -157,6 +159,7 @@ def test_walk_forward_tournament_evaluates_all_competitors():
         assert len(result.daily_returns[name]) > 0
 
 
+# Test: walk forward tournament preserves stateful winner state.
 def test_walk_forward_tournament_preserves_stateful_winner_state():
     n = 60
     base = np.full((n, 2), 0.6, dtype=float)
@@ -189,6 +192,7 @@ def test_walk_forward_tournament_preserves_stateful_winner_state():
     assert winner.train_calls == 1
 
 
+# Test: combiner respects max drawdown limit.
 def test_combiner_respects_max_drawdown_limit(monkeypatch):
     monkeypatch.setattr("app.services.ml_workflow._daily_news_features", lambda d, symbols: _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[0.0] * 8, news_item_count=1))
     monkeypatch.setattr(
@@ -326,6 +330,7 @@ def test_combiner_respects_max_drawdown_limit(monkeypatch):
     assert max_drawdown < 0.15, f"Expected max drawdown < 15%, got {max_drawdown:.4f}"
 
 
+# Test: meta combiner outperforms buy and hold sharpe.
 def test_meta_combiner_outperforms_buy_and_hold_sharpe(monkeypatch):
     monkeypatch.setattr("app.services.ml_workflow._daily_news_features", lambda d, symbols: _DailyNewsFeatures(symbol_sentiment={}, market_sentiment=0.0, macro_features=[0.0] * 8, news_item_count=1))
     monkeypatch.setattr(
@@ -504,6 +509,7 @@ def test_meta_combiner_outperforms_buy_and_hold_sharpe(monkeypatch):
     assert ml_sharpe > spy_sharpe, f"Expected ML Sharpe ({ml_sharpe:.4f}) > SPY Sharpe ({spy_sharpe:.4f})"
 
 
+# Test: regime switcher covid crash reduces exposure.
 def test_regime_switcher_covid_crash_reduces_exposure(monkeypatch):
     del monkeypatch
 
