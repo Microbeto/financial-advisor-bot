@@ -94,6 +94,116 @@ def test_weighted_score_prefers_f1():
     assert high_f1 > low_f1
 
 
+def test_weighted_score_prefers_lower_future_price_error():
+    low_error = _weighted_score(
+        {
+            "accuracy": 0.66,
+            "precision": 0.66,
+            "recall": 0.66,
+            "f1": 0.66,
+            "future_price_mae_pct": 1.2,
+        }
+    )
+    high_error = _weighted_score(
+        {
+            "accuracy": 0.82,
+            "precision": 0.82,
+            "recall": 0.82,
+            "f1": 0.82,
+            "future_price_mae_pct": 8.5,
+        }
+    )
+
+    assert low_error > high_error
+
+
+def test_weighted_score_prioritizes_institutional_risk_metrics():
+    strong_institutional = _weighted_score(
+        {
+            "accuracy": 0.58,
+            "precision": 0.58,
+            "recall": 0.58,
+            "f1": 0.58,
+            "annualized_sharpe": 1.8,
+            "max_drawdown": -0.08,
+            "future_price_mae_pct": 2.4,
+        }
+    )
+    weak_institutional = _weighted_score(
+        {
+            "accuracy": 0.86,
+            "precision": 0.86,
+            "recall": 0.86,
+            "f1": 0.86,
+            "annualized_sharpe": 0.2,
+            "max_drawdown": -0.35,
+            "future_price_mae_pct": 1.6,
+        }
+    )
+
+    assert strong_institutional > weak_institutional
+
+
+def test_rank_models_prefers_lower_future_price_error_when_available():
+    lower_price_error = {
+        "algorithm": "low_price_err",
+        "metrics": {
+            "accuracy": 0.62,
+            "precision": 0.62,
+            "recall": 0.62,
+            "f1": 0.62,
+            "future_price_mae_pct": 1.1,
+        },
+        "score": 0.1,
+    }
+    higher_price_error = {
+        "algorithm": "high_price_err",
+        "metrics": {
+            "accuracy": 0.86,
+            "precision": 0.86,
+            "recall": 0.86,
+            "f1": 0.86,
+            "future_price_mae_pct": 9.4,
+        },
+        "score": 0.9,
+    }
+
+    ranked = _rank_models([higher_price_error, lower_price_error])
+    assert ranked[0]["algorithm"] == "low_price_err"
+
+
+def test_rank_models_prioritizes_sharpe_and_drawdown_with_price_factor():
+    institutional_winner = {
+        "algorithm": "institutional_winner",
+        "metrics": {
+            "accuracy": 0.60,
+            "precision": 0.60,
+            "recall": 0.60,
+            "f1": 0.60,
+            "annualized_sharpe": 1.5,
+            "max_drawdown": -0.10,
+            "future_price_mae_pct": 2.1,
+        },
+        "score": 0.0,
+    }
+    directional_only_candidate = {
+        "algorithm": "directional_only",
+        "metrics": {
+            "accuracy": 0.90,
+            "precision": 0.90,
+            "recall": 0.90,
+            "f1": 0.90,
+            "annualized_sharpe": 0.1,
+            "max_drawdown": -0.45,
+            "future_price_mae_pct": 1.2,
+        },
+        "score": 1.0,
+    }
+
+    ranked = _rank_models([directional_only_candidate, institutional_winner])
+    assert ranked[0]["algorithm"] == "institutional_winner"
+
+
 def test_feature_stability_for_flat_prices():
     closes = list(np.repeat(100.0, 50))
     feats = _technical_features(closes)
