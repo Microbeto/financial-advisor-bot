@@ -5,7 +5,7 @@ import inspect
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Dict
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -13,8 +13,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import db
 from .models import (
+    AdminUserActivity,
     AdminUserDetailResponse,
+    AdminUserErrorItem,
     AdminUserExportResponse,
+    AdminUserFinancialContext,
+    AdminUserSecurity,
     AdminUserStateResetResponse,
     AdminUserStatusUpdateRequest,
     AnnotatedHistoryResponse,
@@ -47,10 +51,13 @@ from .models import (
     PortfolioSnapshot,
     RateLimitUpdateRequest,
     RegisterRequest,
+    Role,
     RiskProfile,
+    RiskToleranceEnum,
     RoleUpdateRequest,
     SignalItem,
     SignalsToday,
+    NewsRefreshStats,
     UniverseUpdateRequest,
     UserListResponse,
     UserPublic,
@@ -127,9 +134,9 @@ def _acquire_limit_sync(key: str) -> None:
     Run async limiter acquisition from sync routes executed in FastAPI's threadpool.
     """
     try:
-        import anyio
+        import asyncio
 
-        anyio.from_thread.run(_acquire_limit, key)
+        asyncio.run(_acquire_limit(key))
     except Exception:
         return
 
@@ -160,6 +167,26 @@ def _claims_required(authorization: str | None) -> dict[str, str]:
 
 def _utc_iso_z(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _normalize_role(value: Any) -> Role:
+    r = str(value or "").strip().lower()
+    if r == "premium":
+        return "premium"
+    if r == "admin":
+        return "admin"
+    if r == "manager":
+        return "manager"
+    return "user"
+
+
+def _normalize_risk_tolerance(value: Any) -> RiskToleranceEnum:
+    raw = str(value or "balanced").strip().lower()
+    if raw == "low":
+        return RiskToleranceEnum.LOW
+    if raw == "aggressive":
+        return RiskToleranceEnum.AGGRESSIVE
+    return RiskToleranceEnum.BALANCED
 
 
 @asynccontextmanager
@@ -612,7 +639,7 @@ def create_app() -> FastAPI:
         return UserPublic(
             user_id=str(claims.get("uid", "")),
             email=str(claims.get("email", "")),
-            role=str(claims.get("role", "user")),
+            role=_normalize_role(claims.get("role")),
             created_at=db.utc_now(),
         )
 
@@ -811,7 +838,7 @@ def create_app() -> FastAPI:
             ml_winner_name=fi.get("winner_name"),
             ml_feature_labels=list(fi.get("feature_labels") or []),
             ml_feature_importances=[float(x) for x in (fi.get("feature_importances") or [])],
-            news_refresh_stats=getattr(dash, "news_refresh_stats", None),
+            news_refresh_stats=getattr(dash, "news_refresh_stats", NewsRefreshStats()),
         )
 
     @app.get("/market/annotated/{symbol}", response_model=AnnotatedHistoryResponse)
@@ -1104,38 +1131,38 @@ def create_app() -> FastAPI:
             pass
 
         error_docs = list(audit_col.find({"user_id": user_id, "level": "error"}).sort([("created_at", -1)]).limit(25))
-        error_logs: list[dict[str, Any]] = []
+        error_logs: list[AdminUserErrorItem] = []
         for e in error_docs:
             error_logs.append(
-                {
-                    "timestamp": e.get("created_at"),
-                    "path": str(e.get("path") or ""),
-                    "method": str(e.get("method") or ""),
-                    "message": str(e.get("message") or ""),
-                }
+                AdminUserErrorItem(
+                    timestamp=e.get("created_at"),
+                    path=str(e.get("path") or ""),
+                    method=str(e.get("method") or ""),
+                    message=str(e.get("message") or ""),
+                )
             )
 
         return AdminUserDetailResponse(
             user_id=user_id,
             email=str(doc.get("email") or ""),
-            role=str(doc.get("role") or "user"),
+            role=_normalize_role(doc.get("role")),
             created_at=doc.get("created_at") or db.utc_now(),
-            security={
-                "status": security_status,
-                "failed_login_attempts": failed_login_attempts,
-                "locked_until": locked_until,
-            },
-            financial_context={
-                "risk_tolerance": str(risk_doc.get("risk_tolerance") or "balanced"),
-                "horizon_years": risk_doc.get("horizon_years"),
-                "max_drawdown_pct": risk_doc.get("max_drawdown_pct"),
-                "constraints": list(risk_doc.get("constraints") or []),
-                "custom_universe": custom_universe,
-            },
-            activity={
-                "last_login_at": _to_dt(doc.get("last_login_at")),
-                "last_dashboard_at": last_dashboard_at,
-            },
+            security=AdminUserSecurity(
+                status=security_status,
+                failed_login_attempts=failed_login_attempts,
+                locked_until=locked_until,
+            ),
+            financial_context=AdminUserFinancialContext(
+                risk_tolerance=_normalize_risk_tolerance(risk_doc.get("risk_tolerance")),
+                horizon_years=risk_doc.get("horizon_years"),
+                max_drawdown_pct=risk_doc.get("max_drawdown_pct"),
+                constraints=list(risk_doc.get("constraints") or []),
+                custom_universe=custom_universe,
+            ),
+            activity=AdminUserActivity(
+                last_login_at=_to_dt(doc.get("last_login_at")),
+                last_dashboard_at=last_dashboard_at,
+            ),
             rate_limit=rate_limit_state,
             error_logs=error_logs,
         )

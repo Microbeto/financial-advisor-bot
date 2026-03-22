@@ -148,7 +148,7 @@ class RiskProfile(BaseModel):
     client_name: str = ""
     age: Optional[int] = None
     horizon_years: Optional[int] = None
-    risk_tolerance: RiskTolerance = "balanced"
+    risk_tolerance: RiskTolerance = RiskToleranceEnum.BALANCED
     max_drawdown_pct: Optional[float] = None
     income_stability: str = ""
     constraints: List[str] = Field(default_factory=list)
