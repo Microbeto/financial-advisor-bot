@@ -60,6 +60,7 @@ def run_walk_forward_tournament(
     transaction_cost_bps: float = DEFAULT_TRANSACTION_COST_BPS,
     annual_risk_free_rate: float = DEFAULT_ANNUAL_RISK_FREE_RATE,
 ) -> TournamentResult:
+    # Initialize competitors and detect which ones keep state across folds.
     seeded_models = [factory() for factory in competitor_factories]
     competitor_names = [model.name for model in seeded_models]
     stateful_flags = {
@@ -80,11 +81,13 @@ def run_walk_forward_tournament(
     return_log: Dict[str, List[float]] = {name: [] for name in competitor_names}
     trading_cost = _cost_rate_from_bps(transaction_cost_bps)
 
+    # Process folds in chronological order to preserve temporal causality.
     ordered_splits = sorted(
         splits,
         key=lambda pair: int(pair[1][0]) if len(pair[1]) else int(pair[0][0]),
     )
 
+    # Train/evaluate all competitors fold by fold in walk-forward mode.
     for tr_idx, te_idx in ordered_splits:
         x_train_base = base_predictions[tr_idx]
         x_train_market = market_features[tr_idx]
@@ -93,6 +96,7 @@ def run_walk_forward_tournament(
         fold_models: List[MetaCombiner] = []
         fold_names: List[str] = []
         current_allocations: Dict[str, np.ndarray] = {}
+        # Reuse stateful models, but retrain stateless models each fold.
         for seeded_model, factory in zip(seeded_models, competitor_factories):
             name = seeded_model.name
             if stateful_flags.get(name, False):
@@ -111,6 +115,7 @@ def run_walk_forward_tournament(
             fold_models.append(model)
             fold_names.append(name)
 
+        # Score each competitor on every out-of-sample row with transaction costs.
         for row_idx in te_idx:
             base_row = base_predictions[row_idx]
             market_row = market_features[row_idx]
@@ -137,6 +142,7 @@ def run_walk_forward_tournament(
                     realized_market_features=market_row,
                 )
 
+        # Carry forward current allocations only for stateful competitors.
         for name in fold_names:
             if stateful_flags.get(name, False):
                 persistent_allocations[name] = np.asarray(
@@ -144,6 +150,7 @@ def run_walk_forward_tournament(
                     dtype=float,
                 ).reshape(-1)
 
+    # Aggregate per-competitor risk/return statistics from daily walk-forward returns.
     stats: Dict[str, Dict[str, float]] = {}
     for name, vals in return_log.items():
         arr = np.asarray(vals, dtype=float)
@@ -155,6 +162,7 @@ def run_walk_forward_tournament(
             "sample_count": float(arr.size),
         }
 
+    # Pick winner by Sharpe with drawdown-aware tie-break, preferring eligible competitors.
     eligible = [
         kv
         for kv in stats.items()
@@ -168,6 +176,7 @@ def run_walk_forward_tournament(
     )
     winner_name = ranked[0][0] if ranked else competitor_names[0]
 
+    # Resolve winner instance (stateful carry-over if available, otherwise retrain fresh).
     winner_model: MetaCombiner | None = None
     if stateful_flags.get(winner_name, False):
         winner_model = persistent_models.get(winner_name)

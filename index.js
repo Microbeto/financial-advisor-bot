@@ -1,6 +1,5 @@
 // index.js
 // Starts backend (FastAPI via Uvicorn) and frontend (Next.js).
-// Windows-safe: handles spaces in paths by avoiding shell for absolute executables.
 
 const { spawn } = require("child_process");
 const path = require("path");
@@ -206,7 +205,6 @@ async function waitForBackendHealthy(timeoutMs) {
 async function checkPortInUse(port) {
   // If /health responds, backend is up.
   // If it doesn't, port may still be in use by some other process.
-  // We do not auto-kill unknown processes; we only warn.
   if (await isBackendHealthy()) return { inUse: true, healthy: true };
 
   // Try a bare TCP connect via HTTP request to root; if it connects, something is listening.

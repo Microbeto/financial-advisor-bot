@@ -78,7 +78,7 @@ class IntelligenceRouter:
                 pass
 
         # Fallback path: detect NVIDIA GPU presence directly via nvidia-smi.
-        # This covers environments with CPU-only torch builds (+cpu wheels).
+        # This covers environments with CPU-only torch builds (+ cpu wheels).
         try:
             proc = subprocess.run(
                 ["nvidia-smi", "-L"],

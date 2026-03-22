@@ -92,7 +92,7 @@ def run_backtest_chart(
         if len(closes) < 2:
             return {"error": "insufficient price data"}
 
-Equity curves ----------
+    # Equity curves
         # Simple buy-and-hold: buy on day 0, sell on last day
         n = len(closes)
         start_price = float(closes[0])
@@ -125,7 +125,7 @@ Equity curves ----------
 
         alpha = after_friction_return - bench_return
 
-Risk metrics ----------
+    # Risk metrics
         daily_returns = np.diff(closes) / closes[:-1]
         trading_days  = 252.0
         ann_vol = float(np.std(daily_returns, ddof=1) * math.sqrt(trading_days)) if len(daily_returns) > 1 else 0.0
@@ -141,7 +141,7 @@ Risk metrics ----------
         drawdowns   = (strategy_equity - running_max) / np.where(running_max > 0, running_max, 1.0)
         max_drawdown = float(np.min(drawdowns))
 
-Build time-series for the frontend ----------
+    # Build time-series for the frontend
         equity_series = [
             {"t": dates[i] if i < len(dates) else str(i),
              "strategy": round(float(strategy_equity[i]), 2),
@@ -178,7 +178,7 @@ Build time-series for the frontend ----------
             "drawdown_series":         drawdown_series,
         }
 
-Save PNG (opt-in) ----------
+    # Save PNG (opt-in)
         if save_image:
             _save_backtest_png(summary, symbol, base_dir)
 
@@ -197,7 +197,7 @@ def _save_backtest_png(s: Dict[str, Any], symbol: str, base_dir: Path) -> None:
         fig = plt.figure(figsize=(16, 12))
         fig.suptitle(f"Backtest – Backtest Performance Report", fontsize=14, fontweight="bold", y=0.98)
 
-        # ── Top-left: Returns Analysis (bar chart)
+        # Top-left: Returns Analysis (bar chart)
         ax1 = fig.add_subplot(2, 2, 1)
         bar_labels = ["Before\nFriction", "After\nFriction", "Benchmark", "Alpha"]
         bar_values = [
@@ -215,7 +215,7 @@ def _save_backtest_png(s: Dict[str, Any], symbol: str, base_dir: Path) -> None:
         ax1.set_title("Returns Analysis")
         ax1.grid(axis="y", alpha=0.25)
 
-        # ── Top-right: Risk-Adjusted Performance (bar chart)
+        # Top-right: Risk-Adjusted Performance (bar chart)
         ax2 = fig.add_subplot(2, 2, 2)
         ra_labels = ["Sharpe\nRatio", "Max\nDrawdown (%)"]
         ra_values = [s["sharpe_ratio"], abs(s["max_drawdown_pct"])]
@@ -228,7 +228,7 @@ def _save_backtest_png(s: Dict[str, Any], symbol: str, base_dir: Path) -> None:
         ax2.set_title("Risk-Adjusted Performance")
         ax2.grid(axis="y", alpha=0.25)
 
-        # ── Bottom-left: Equity Curve
+        # Bottom-left: Equity Curve
         ax3 = fig.add_subplot(2, 2, 3)
         eq = s.get("equity_series") or []
         if eq:
@@ -246,7 +246,7 @@ def _save_backtest_png(s: Dict[str, Any], symbol: str, base_dir: Path) -> None:
             ax3.legend(fontsize=7, loc="upper left")
             ax3.grid(alpha=0.20)
 
-        # ── Bottom-right: Drawdown
+        # Bottom-right: Drawdown
         ax4 = fig.add_subplot(2, 2, 4)
         dd = s.get("drawdown_series") or []
         if dd:
@@ -260,7 +260,7 @@ def _save_backtest_png(s: Dict[str, Any], symbol: str, base_dir: Path) -> None:
             ax4.set_title("Portfolio Drawdown")
             ax4.grid(alpha=0.20)
 
-        # ── Text boxes for metrics summary
+        # Text boxes for metrics summary
         friction_text = (
             f"Backtest – Trading Friction Metrics\n\n"
             f"Total Trades: {s['num_trades']}\n"
@@ -800,7 +800,7 @@ def _save_valuation_confidence_png(
                                         gridspec_kw={"height_ratios": [3, 1], "hspace": 0.35})
         fig.suptitle(f"Valuation Confidence Intervals – {symbol}", fontsize=13, fontweight="bold")
 
-        # ── Top panel ──
+        # Top panel
         ax1.fill_between(xs, upper2, lower2, alpha=0.15, color="#4C9BE8", label="±2σ band")
         ax1.fill_between(xs, upper1, lower1, alpha=0.25, color="#4C9BE8", label="±1σ band")
         ax1.plot(xs, closes,  color="#E8E8FF", lw=1.4, label="Close",   zorder=4)
@@ -819,7 +819,7 @@ def _save_valuation_confidence_png(
         ax1.grid(alpha=0.18)
         _xtick_labels(dates, ax1)
 
-        # ── Bottom panel: %B oscillator ──
+        # Bottom panel: %B oscillator
         pct_b_arr = (closes - lower2) / np.where((upper2 - lower2) > 0, upper2 - lower2, 1.0)
         ax2.fill_between(xs, pct_b_arr, 0.5, where=pct_b_arr > 0.5,
                          alpha=0.30, color="#E84C4C", label="Above midband")

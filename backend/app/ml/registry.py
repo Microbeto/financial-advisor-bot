@@ -10,7 +10,7 @@ from .regime_switcher import RegimeSwitcherCombiner
 from .rl_agent import RLAgentCombiner
 
 
-# --- Named factory helpers (avoid Python lambda late-binding in loops) ---
+# Named factory helpers (avoid Python lambda late-binding in loops)
 
 def _labeler_factory(seed: int, side_threshold: float, label: str) -> Callable[[], MetaCombiner]:
     # MetaLabeler variant factory: captures all params in closure
