@@ -317,6 +317,10 @@ class MLModelMetric(BaseModel):
     recall: float = 0.0
     f1: float = 0.0
     roc_auc: float = 0.0
+    annualized_sharpe: float = 0.0
+    max_drawdown: float = 0.0
+    future_price_mae_pct: float = 0.0
+    future_price_rmse_pct: float = 0.0
 
 
 class MLModelInfo(BaseModel):
