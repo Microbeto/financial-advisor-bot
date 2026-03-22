@@ -4,7 +4,7 @@
 import "./globals.css";
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { StockBackground } from "@/components/stock-background";
 
@@ -34,6 +34,7 @@ function SettingsIcon(props: React.SVGProps<SVGSVGElement>) {
 // Top navigation bar displaying app logo, navigation links, and sign-out button.
 function TopNav() {
   const pathname = usePathname();
+  const router = useRouter();
   const { isSignedIn, signOut } = useAuth();
 
   const mainItems = [
@@ -96,7 +97,10 @@ function TopNav() {
 
               <button
                 type="button"
-                onClick={signOut}
+                onClick={() => {
+                  signOut();
+                  router.push("/");
+                }}
                 className="ml-2 rounded-full border border-slate-600 px-4 py-2 text-xs font-medium text-slate-200 hover:bg-slate-800"
               >
                 Sign out
