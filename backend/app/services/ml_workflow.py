@@ -63,6 +63,7 @@ ML_ENFORCE_NEWS_COVERAGE = os.getenv("ML_ENFORCE_NEWS_COVERAGE", "1").strip().lo
 ML_MAX_NEWS_MISSING_RATIO = float(os.getenv("ML_MAX_NEWS_MISSING_RATIO", "0.10"))
 ML_NLP_PIPELINE = os.getenv("ML_NLP_PIPELINE", "auto").strip().lower()  # auto|lexicon|finbert|cascade
 ML_CASCADE_AMBIGUOUS_ABS = float(os.getenv("ML_CASCADE_AMBIGUOUS_ABS", "0.12"))
+ML_SCORING_RISK_FREE_RATE = float(os.getenv("ML_SCORING_RISK_FREE_RATE", "0.04"))
 
 
 # _finbert_candidates service logic.
@@ -760,12 +761,113 @@ def _evaluate_binary(y_true: np.ndarray, y_pred: np.ndarray, y_prob: Optional[np
 
 # _weighted_score service logic.
 def _weighted_score(metrics: Dict[str, float]) -> float:
-    return float(
+    directional_score = float(
         (0.40 * metrics.get("f1", 0.0))
         + (0.30 * metrics.get("accuracy", 0.0))
         + (0.20 * metrics.get("precision", 0.0))
         + (0.10 * metrics.get("recall", 0.0))
     )
+
+    # Institutional risk-adjusted primary block.
+    # Higher Sharpe and smaller absolute drawdown should strongly dominate ranking.
+    raw_sharpe = metrics.get("annualized_sharpe")
+    raw_max_dd = metrics.get("max_drawdown")
+    has_risk_metrics = (raw_sharpe is not None) and (raw_max_dd is not None)
+
+    sharpe_fit = 0.0
+    drawdown_fit = 0.0
+    if has_risk_metrics:
+        try:
+            sharpe = float(raw_sharpe)
+            max_dd = float(raw_max_dd)
+            # Map Sharpe to [0, 1] with diminishing returns for very large values.
+            sharpe_fit = float(0.5 * (1.0 + np.tanh(sharpe / 2.0)))
+            # Max drawdown is expected <= 0; use absolute loss magnitude.
+            drawdown_fit = float(1.0 / (1.0 + abs(max_dd)))
+        except Exception:
+            has_risk_metrics = False
+
+    # Secondary block: future price closeness factor.
+    raw_price_mae = metrics.get("future_price_mae_pct")
+    price_fit = 0.0
+    has_price_metric = raw_price_mae is not None
+    if has_price_metric:
+        try:
+            price_mae = max(0.0, float(raw_price_mae))
+            # Lower MAE -> higher score, bounded to (0, 1].
+            price_fit = float(1.0 / (1.0 + price_mae))
+        except Exception:
+            has_price_metric = False
+
+    if has_risk_metrics:
+        if has_price_metric:
+            return float(
+                (0.45 * sharpe_fit)
+                + (0.35 * drawdown_fit)
+                + (0.15 * price_fit)
+                + (0.05 * directional_score)
+            )
+        return float((0.55 * sharpe_fit) + (0.40 * drawdown_fit) + (0.05 * directional_score))
+
+    if has_price_metric:
+        return float((0.75 * price_fit) + (0.25 * directional_score))
+
+    # Legacy fallback when only directional metrics are available.
+    return directional_score
+
+
+def _annualized_sharpe_ratio_from_returns(returns: np.ndarray, annual_risk_free_rate: float = ML_SCORING_RISK_FREE_RATE) -> float:
+    arr = np.asarray(returns, dtype=float).reshape(-1)
+    if arr.size < 2:
+        return 0.0
+    std = float(np.std(arr, ddof=1))
+    if std <= 1e-12:
+        return 0.0
+    daily_rf = float(annual_risk_free_rate / 252.0)
+    excess_mean = float(np.mean(arr) - daily_rf)
+    return float((excess_mean / std) * np.sqrt(252.0))
+
+
+def _max_drawdown_from_returns(returns: np.ndarray) -> float:
+    arr = np.asarray(returns, dtype=float).reshape(-1)
+    if arr.size == 0:
+        return 0.0
+    equity = np.cumprod(1.0 + arr)
+    peaks = np.maximum.accumulate(equity)
+    drawdowns = np.where(peaks > 0.0, (equity / peaks) - 1.0, 0.0)
+    return float(np.min(drawdowns))
+
+
+def _strategy_daily_returns_from_probs(probs: np.ndarray, realized_returns: np.ndarray) -> np.ndarray:
+    p = np.asarray(probs, dtype=float).reshape(-1)
+    r = np.asarray(realized_returns, dtype=float).reshape(-1)
+    n = min(p.size, r.size)
+    if n <= 0:
+        return np.asarray([], dtype=float)
+    alloc = np.clip((2.0 * p[:n]) - 1.0, -1.0, 1.0)
+    return np.asarray(alloc * r[:n], dtype=float)
+
+
+def _class_conditional_return_anchors(y_train: np.ndarray, returns_train: np.ndarray) -> Tuple[float, float]:
+    y_arr = np.asarray(y_train, dtype=int).reshape(-1)
+    r_arr = np.asarray(returns_train, dtype=float).reshape(-1)
+    if y_arr.size == 0 or r_arr.size == 0 or y_arr.size != r_arr.size:
+        return 0.0, 0.0
+
+    up_mask = y_arr == 1
+    dn_mask = y_arr == 0
+
+    overall = float(np.mean(r_arr)) if r_arr.size else 0.0
+    up_mean = float(np.mean(r_arr[up_mask])) if np.any(up_mask) else max(0.0, overall)
+    dn_mean = float(np.mean(r_arr[dn_mask])) if np.any(dn_mask) else min(0.0, overall)
+
+    if up_mean <= dn_mean:
+        spread = float(np.std(r_arr, ddof=1)) if r_arr.size > 1 else 0.0
+        spread = max(1e-6, spread)
+        up_mean = float(overall + (0.5 * spread))
+        dn_mean = float(overall - (0.5 * spread))
+
+    return dn_mean, up_mean
 
 
 # _data_completeness_from_news_coverage service logic.
@@ -827,6 +929,11 @@ def _family_from_algorithm(algorithm: str) -> str:
 
 # _rank_models service logic.
 def _rank_models(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    for item in items:
+        metrics = item.get("metrics") or {}
+        if isinstance(metrics, dict) and metrics:
+            item["score"] = _weighted_score(metrics)
+
     ranked = sorted(items, key=lambda x: float(x.get("score", 0.0)), reverse=True)
     for i, item in enumerate(ranked, start=1):
         item["rank"] = i
@@ -1606,11 +1713,22 @@ def _fit_score_over_walk_forward(
     X: np.ndarray,
     y: np.ndarray,
     splits: List[Tuple[np.ndarray, np.ndarray]],
+    actual_returns: Optional[np.ndarray] = None,
     oof_collector: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     y_true_all: List[int] = []
     y_pred_all: List[int] = []
     y_prob_all: List[float] = []
+    strategy_ret_all: List[float] = []
+    abs_ret_err_all: List[float] = []
+    sq_ret_err_all: List[float] = []
+
+    returns_arr: Optional[np.ndarray]
+    if actual_returns is None:
+        returns_arr = None
+    else:
+        arr = np.asarray(actual_returns, dtype=float).reshape(-1)
+        returns_arr = arr if arr.shape[0] == X.shape[0] else None
 
     for tr_idx, te_idx in splits:
         model = factory()
@@ -1621,6 +1739,17 @@ def _fit_score_over_walk_forward(
         y_true_all.extend([int(v) for v in y[te_idx]])
         y_pred_all.extend([int(v) for v in preds])
         y_prob_all.extend([float(v) for v in probs])
+
+        if returns_arr is not None:
+            strat_rets = _strategy_daily_returns_from_probs(np.asarray(probs, dtype=float), returns_arr[te_idx])
+            strategy_ret_all.extend([float(v) for v in strat_rets])
+            dn_mu, up_mu = _class_conditional_return_anchors(y[tr_idx], returns_arr[tr_idx])
+            pred_ret = dn_mu + (np.asarray(probs, dtype=float) * (up_mu - dn_mu))
+            act_ret = np.asarray(returns_arr[te_idx], dtype=float)
+            abs_err = np.abs(pred_ret - act_ret)
+            sq_err = np.square(pred_ret - act_ret)
+            abs_ret_err_all.extend([float(v) for v in abs_err])
+            sq_ret_err_all.extend([float(v) for v in sq_err])
 
         if oof_collector is not None:
             oof_collector[te_idx] = probs
@@ -1633,6 +1762,19 @@ def _fit_score_over_walk_forward(
             np.asarray(y_pred_all, dtype=int),
             np.asarray(y_prob_all, dtype=float),
         )
+
+    if abs_ret_err_all:
+        mae_pct = float(np.mean(np.asarray(abs_ret_err_all, dtype=float)) * 100.0)
+        rmse_pct = float(np.sqrt(np.mean(np.asarray(sq_ret_err_all, dtype=float))) * 100.0)
+    else:
+        mae_pct = float("inf")
+        rmse_pct = float("inf")
+
+    metrics["future_price_mae_pct"] = mae_pct
+    metrics["future_price_rmse_pct"] = rmse_pct
+    strategy_arr = np.asarray(strategy_ret_all, dtype=float)
+    metrics["annualized_sharpe"] = _annualized_sharpe_ratio_from_returns(strategy_arr)
+    metrics["max_drawdown"] = _max_drawdown_from_returns(strategy_arr)
 
     final_model = factory()
     final_model.fit(X, y)
@@ -1818,6 +1960,15 @@ def _train_multi_armed_tournament(
     probs = np.clip((np.clip(allocations, -1.0, 1.0) + 1.0) / 2.0, 0.0, 1.0)
     preds = np.where(probs >= 0.5, 1, 0)
     metrics = _evaluate_binary(y_valid, preds, probs)
+    strategy_rets = _strategy_daily_returns_from_probs(probs, returns_valid)
+    metrics["annualized_sharpe"] = _annualized_sharpe_ratio_from_returns(strategy_rets)
+    metrics["max_drawdown"] = _max_drawdown_from_returns(strategy_rets)
+    dn_mu, up_mu = _class_conditional_return_anchors(y_valid, returns_valid)
+    pred_ret = dn_mu + (np.asarray(probs, dtype=float) * (up_mu - dn_mu))
+    abs_err = np.abs(pred_ret - returns_valid)
+    sq_err = np.square(pred_ret - returns_valid)
+    metrics["future_price_mae_pct"] = float(np.mean(abs_err) * 100.0) if abs_err.size else float("inf")
+    metrics["future_price_rmse_pct"] = float(np.sqrt(np.mean(sq_err)) * 100.0) if sq_err.size else float("inf")
 
     packed_model = {
         "kind": "multi_armed_tournament",
@@ -2237,7 +2388,15 @@ async def train_models_async(req: MLTrainingRequest) -> MLTrainResponse:
         t0 = time.perf_counter()
         try:
             oof_col = np.full(Xn.shape[0], np.nan, dtype=float)
-            res = _fit_score_over_walk_forward(name, factory, Xn, y, splits, oof_collector=oof_col)
+            res = _fit_score_over_walk_forward(
+                name,
+                factory,
+                Xn,
+                y,
+                splits,
+                actual_returns=actual_returns,
+                oof_collector=oof_col,
+            )
             oof_probs_for_viz[name] = oof_col
             completed.append(res)
             m = res.get("metrics") or {}
