@@ -21,7 +21,7 @@ def get_user_public(user_id: str) -> Optional[UserPublic]:
     return UserPublic(
         user_id=str(doc["_id"]),
         email=str(doc.get("email", "")),
-        role=str(doc.get("role", "user")),
+        role=_normalize_role(doc.get("role")),
         created_at=doc.get("created_at"),
     )
 
@@ -31,10 +31,7 @@ def get_user_role(user_id: str) -> Role:
     p = get_user_public(user_id)
     if not p:
         return "user"
-    role = str(p.role)
-    if role in ("premium", "admin", "manager"):
-        return role  # type: ignore[return-value]
-    return "user"
+    return _normalize_role(p.role)
 
 
 # list_users service logic.
@@ -47,11 +44,23 @@ def list_users(limit: int = 200) -> List[UserPublic]:
             UserPublic(
                 user_id=str(d.get("_id")),
                 email=str(d.get("email", "")),
-                role=str(d.get("role", "user")),
+                role=_normalize_role(d.get("role")),
                 created_at=d.get("created_at"),
             )
         )
     return out
+
+
+# _normalize_role service logic.
+def _normalize_role(value: object) -> Role:
+    role = str(value or "").strip().lower()
+    if role == "premium":
+        return "premium"
+    if role == "admin":
+        return "admin"
+    if role == "manager":
+        return "manager"
+    return "user"
 
 
 # update_user_role service logic.

@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 import time
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 from .. import db
@@ -154,7 +154,7 @@ class _NewsFinBertInferencer:
         local_only_modes = (True,)
         for local_only in local_only_modes:
             try:
-                kwargs = {"local_files_only": local_only}
+                kwargs: Dict[str, Any] = {"local_files_only": local_only}
                 if cache_dir:
                     kwargs["cache_dir"] = cache_dir
                 tokenizer = tr_mod.AutoTokenizer.from_pretrained(model_name, **kwargs)

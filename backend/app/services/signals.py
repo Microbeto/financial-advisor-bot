@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
 from .. import db
-from ..models import DashboardResponse, NewsItem, Regime, RiskProfile, TrendItem
+from ..models import DashboardResponse, NewsItem, NewsRefreshStats, Regime, RiskProfile, RiskToleranceEnum, TrendItem
 from ..core.utils import iso_date_utc
 from ..engine.glossary import lingo_glossary
 from ..engine.llm_service import GenerativeIntelligence
@@ -407,7 +407,7 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
     role = "user" if user_id == "public" else str(get_user_role(user_id))
 
     if user_id == "public":
-        profile = RiskProfile(user_id="public", risk_tolerance="balanced", constraints=[])
+        profile = RiskProfile(user_id="public", risk_tolerance=RiskToleranceEnum.BALANCED, constraints=[])
     else:
         profile = get_risk_profile_for_user(user_id) or ensure_risk_profile_for_user(user_id)
 
@@ -434,7 +434,7 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
             system_capability=capability,  # type: ignore[arg-type]
             llm_summary_enabled=llm_summary_enabled,
             market_summary=market_summary,
-            news_refresh_stats=get_news_refresh_stats(),
+            news_refresh_stats=NewsRefreshStats(**get_news_refresh_stats()),
             glossary=lingo_glossary(),
         )
 
@@ -531,7 +531,7 @@ async def build_dashboard_for_user(user_id: str) -> DashboardResponse:
         system_capability=capability,  # type: ignore[arg-type]
         llm_summary_enabled=llm_summary_enabled,
         market_summary=market_summary,
-        news_refresh_stats=get_news_refresh_stats(),
+        news_refresh_stats=NewsRefreshStats(**get_news_refresh_stats()),
         glossary=lingo_glossary(),
     )
 

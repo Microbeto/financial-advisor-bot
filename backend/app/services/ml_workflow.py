@@ -772,11 +772,11 @@ def _weighted_score(metrics: Dict[str, float]) -> float:
     # Higher Sharpe and smaller absolute drawdown should strongly dominate ranking.
     raw_sharpe = metrics.get("annualized_sharpe")
     raw_max_dd = metrics.get("max_drawdown")
-    has_risk_metrics = (raw_sharpe is not None) and (raw_max_dd is not None)
+    has_risk_metrics = False
 
     sharpe_fit = 0.0
     drawdown_fit = 0.0
-    if has_risk_metrics:
+    if raw_sharpe is not None and raw_max_dd is not None:
         try:
             sharpe = float(raw_sharpe)
             max_dd = float(raw_max_dd)
@@ -784,18 +784,20 @@ def _weighted_score(metrics: Dict[str, float]) -> float:
             sharpe_fit = float(0.5 * (1.0 + np.tanh(sharpe / 2.0)))
             # Max drawdown is expected <= 0; use absolute loss magnitude.
             drawdown_fit = float(1.0 / (1.0 + abs(max_dd)))
+            has_risk_metrics = True
         except Exception:
             has_risk_metrics = False
 
     # Secondary block: future price closeness factor.
     raw_price_mae = metrics.get("future_price_mae_pct")
     price_fit = 0.0
-    has_price_metric = raw_price_mae is not None
-    if has_price_metric:
+    has_price_metric = False
+    if raw_price_mae is not None:
         try:
             price_mae = max(0.0, float(raw_price_mae))
             # Lower MAE -> higher score, bounded to (0, 1].
             price_fit = float(1.0 / (1.0 + price_mae))
+            has_price_metric = True
         except Exception:
             has_price_metric = False
 
@@ -1153,16 +1155,24 @@ def _resolve_news_coverage_ratio(doc: Dict[str, Any]) -> Optional[float]:
 
 
 # _resolve_model_nlp_pipeline service logic.
-def _resolve_model_nlp_pipeline(doc: Dict[str, Any]) -> str:
+def _resolve_model_nlp_pipeline(doc: Dict[str, Any]) -> Literal["lexicon", "finbert", "cascade"]:
     top_level = str(doc.get("nlp_pipeline") or "").strip().lower()
-    if top_level in ("lexicon", "finbert", "cascade"):
-        return top_level
+    if top_level == "lexicon":
+        return "lexicon"
+    if top_level == "finbert":
+        return "finbert"
+    if top_level == "cascade":
+        return "cascade"
 
     metadata = doc.get("metadata") or {}
     if isinstance(metadata, dict):
         nested = str(metadata.get("nlp_pipeline") or "").strip().lower()
-        if nested in ("lexicon", "finbert", "cascade"):
-            return nested
+        if nested == "lexicon":
+            return "lexicon"
+        if nested == "finbert":
+            return "finbert"
+        if nested == "cascade":
+            return "cascade"
 
     # Legacy models were trained with FinBERT path (with internal lexicon fallback).
     return "finbert"
@@ -2227,10 +2237,15 @@ async def predict_series_for_symbol(
         if j < len(probs) and 0 <= idx < len(full_probs):
             full_probs[idx] = float(probs[j])
 
-    out_series = [
-        {"t": dates[i], "prob_up": (None if full_probs[i] is None else round(float(full_probs[i]), 6))}
-        for i in range(len(dates))
-    ]
+    out_series: List[Dict[str, Any]] = []
+    for i in range(len(dates)):
+        prob_i = full_probs[i]
+        prob_up_val: Optional[float]
+        if prob_i is None:
+            prob_up_val = None
+        else:
+            prob_up_val = round(float(prob_i), 6)
+        out_series.append({"t": dates[i], "prob_up": prob_up_val})
 
     return {"symbol": sym, "model_id": (used_model_id or model_id or "selected"), "series": out_series}
 
